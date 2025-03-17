@@ -55,21 +55,27 @@ class MainGameScene extends Phaser.Scene {
     }
 
     create() {
-        this.player = this.physics.add.sprite(400, 300, 'player');
-        this.player.health = 6;
-        this.player.maxHealth = 6;
-        this.player.lastDamageTime = 0;
-
-        this.lastShootTime = 0;
-        this.shootCooldown = 200;
-
+        // Setup gameplay area with borders
         this.walls = this.physics.add.staticGroup();
         this.innerWalls = this.physics.add.staticGroup();
         this.enemies = this.physics.add.group();
         this.enemyProjectiles = this.physics.add.group();
-        this.doors = this.physics.add.staticGroup();
+        this.doors = this.physics.add.group(); // Changed from staticGroup to regular group for better collision
         this.boss = null;
         this.isBossRoom = false;
+
+        // Create game UI
+        this.createUI();
+        
+        // Create the player
+        this.player = this.physics.add.sprite(400, 300, 'player');
+        this.player.health = 6;
+        this.player.maxHealth = 6;
+        this.player.lastDamageTime = 0;
+        this.player.setDepth(10); // Ensure player is above other elements
+        
+        this.lastShootTime = 0;
+        this.shootCooldown = 200;
 
         // Add projectiles group here
         this.projectiles = this.physics.add.group();
@@ -87,16 +93,7 @@ class MainGameScene extends Phaser.Scene {
             }
             projectile.destroy();
         });
-        
-        this.hearts = [];
-        for (let i = 0; i < 3; i++) {
-            this.hearts.push(this.add.image(32 + i * 64, 32, 'heart_full'));
-        }
-
-        this.coins = 0;
-        this.coinsText = this.add.text(16, 64, 'Coins: 0', { fontSize: '32px', fill: '#fff' });
-        this.worldText = this.add.text(670, 32, `World: ${this.currentWorld}`, { fontSize: '24px', fill: '#fff' });
-
+       
         // Set up movement keys (WASD)
         this.keyW = this.input.keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.W);
         this.keyA = this.input.keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.A);
@@ -126,6 +123,28 @@ class MainGameScene extends Phaser.Scene {
             this.shootWithMouse(pointer);
         });
     }
+    
+    createUI() {
+        // Create a UI container that stays on top
+        this.uiContainer = this.add.container(0, 0);
+        this.uiContainer.setDepth(100); // Ensure UI is always on top
+        
+        // Add hearts
+        this.hearts = [];
+        for (let i = 0; i < 3; i++) {
+            const heart = this.add.image(32 + i * 64, 32, 'heart_full');
+            this.hearts.push(heart);
+            this.uiContainer.add(heart);
+        }
+
+        // Add other UI elements
+        this.coinsText = this.add.text(16, 64, 'Coins: 0', { fontSize: '32px', fill: '#fff' });
+        this.worldText = this.add.text(670, 32, `World: ${this.currentWorld}`, { fontSize: '24px', fill: '#fff' });
+        
+        // Add texts to UI container
+        this.uiContainer.add(this.coinsText);
+        this.uiContainer.add(this.worldText);
+    }
 
     update(time) {
         this.player.setVelocity(0);
@@ -136,7 +155,9 @@ class MainGameScene extends Phaser.Scene {
 
         this.enemies.children.iterate(enemy => {
             if (enemy && enemy.active) {
-                this.physics.moveToObject(enemy, this.player, enemy.speed);
+                // Update enemy pathfinding AI
+                this.updateEnemyMovement(enemy, time);
+                
                 if ((enemy.type === 'blob' || enemy.type === 'boss') && time > enemy.lastShootTime + enemy.shootCooldown) {
                     this.shootEnemyProjectile(enemy);
                     enemy.lastShootTime = time;
@@ -162,6 +183,32 @@ class MainGameScene extends Phaser.Scene {
             this.shoot('up');
         } else if (this.keyDown.isDown) {
             this.shoot('down');
+        }
+    }
+    
+    updateEnemyMovement(enemy, time) {
+        if (!enemy || !enemy.active || !this.player || !this.player.active) return;
+        
+        // Simple naive AI - don't move directly to player, but try to avoid walls
+        // Calculate direction to player
+        const dx = this.player.x - enemy.x;
+        const dy = this.player.y - enemy.y;
+        
+        // Normalize direction
+        const distance = Math.sqrt(dx * dx + dy * dy);
+        const normalizedDx = dx / distance;
+        const normalizedDy = dy / distance;
+        
+        // Set velocity based on direction
+        let velocityX = normalizedDx * enemy.speed;
+        let velocityY = normalizedDy * enemy.speed;
+        
+        // Apply velocity
+        enemy.setVelocity(velocityX, velocityY);
+        
+        // Slow down enemies slightly to make game more fair
+        if (time % 500 < 100) {
+            enemy.setVelocity(0, 0);
         }
     }
 
@@ -282,6 +329,7 @@ class MainGameScene extends Phaser.Scene {
         this.currentRoom = {x: 0, y: 0};
         
         console.log("Generated map with " + roomsCreated + " rooms for world " + this.currentWorld);
+        console.log("Map structure:", this.roomMap);
     }
 
     loadRoom(x, y) {
@@ -291,10 +339,17 @@ class MainGameScene extends Phaser.Scene {
         this.innerWalls.clear(true, true);
         this.walls.clear(true, true);
         this.doors.clear(true, true);
+        this.projectiles.clear(true, true);
         
         // Set the current room
         this.currentRoom = {x, y};
         const roomKey = `${x},${y}`;
+        
+        // Ensure roomKey exists in map
+        if (!this.roomMap[roomKey]) {
+            console.error("Tried to load nonexistent room:", roomKey);
+            this.roomMap[roomKey] = { type: 'normal', visited: false, doors: {} };
+        }
         
         // Mark room as visited
         this.roomMap[roomKey].visited = true;
@@ -317,6 +372,7 @@ class MainGameScene extends Phaser.Scene {
                 door.direction = 'up';
                 door.targetRoom = roomData.doors.up;
                 door.isOpen = !this.roomActive;
+                door.setOrigin(0.5, 0);
                 this.doors.add(door);
             }
             
@@ -325,6 +381,7 @@ class MainGameScene extends Phaser.Scene {
                 door.direction = 'down';
                 door.targetRoom = roomData.doors.down;
                 door.isOpen = !this.roomActive;
+                door.setOrigin(0.5, 1);
                 this.doors.add(door);
             }
             
@@ -333,6 +390,7 @@ class MainGameScene extends Phaser.Scene {
                 door.direction = 'left';
                 door.targetRoom = roomData.doors.left;
                 door.isOpen = !this.roomActive;
+                door.setOrigin(0, 0.5);
                 this.doors.add(door);
             }
             
@@ -341,6 +399,7 @@ class MainGameScene extends Phaser.Scene {
                 door.direction = 'right';
                 door.targetRoom = roomData.doors.right;
                 door.isOpen = !this.roomActive;
+                door.setOrigin(1, 0.5);
                 this.doors.add(door);
             }
         }
@@ -350,7 +409,7 @@ class MainGameScene extends Phaser.Scene {
             // Add a powerful boss in boss rooms
             this.boss = this.createEnemy('boss', 400, 300);
             this.boss.health = 100 * this.currentWorld; // Scale boss health with world
-            this.boss.scale = 1.5; // Make the boss bigger
+            this.boss.setScale(1.5); // Make the boss bigger
             this.enemies.add(this.boss);
         } else {
             // Add random enemies in normal rooms
@@ -381,12 +440,22 @@ class MainGameScene extends Phaser.Scene {
         this.physics.add.collider(this.projectiles, this.innerWalls, (projectile) => projectile.destroy());
         this.physics.add.collider(this.projectiles, this.walls, (projectile) => projectile.destroy());
         
-        // Door overlap detection
+        // Door overlap detection - improved
         this.physics.add.overlap(this.player, this.doors, (player, door) => {
-            if (door.isOpen) {
-                const [targetX, targetY] = door.targetRoom.split(',').map(Number);
-                this.transitionToRoom(targetX, targetY, door.direction);
+            // Only process if door is open
+            if (!door.isOpen) return;
+            
+            // Get target room coordinates
+            if (!door.targetRoom) {
+                console.error("Door has no target room");
+                return;
             }
+            
+            const [targetX, targetY] = door.targetRoom.split(',').map(Number);
+            console.log(`Moving from ${x},${y} to ${targetX},${targetY} via ${door.direction} door`);
+            
+            // Move to new room
+            this.transitionToRoom(targetX, targetY, door.direction);
         });
         
         // Set room as active (doors locked until enemies are cleared)
@@ -403,21 +472,29 @@ class MainGameScene extends Phaser.Scene {
         let playerX = 400;
         let playerY = 300;
         
-        switch (fromDirection) {
+        // Position player on opposite side of the door they entered
+        const oppositeDirection = {
+            'up': 'down',
+            'down': 'up',
+            'left': 'right',
+            'right': 'left'
+        };
+        
+        switch (oppositeDirection[fromDirection]) {
             case 'up':
                 playerX = 400;
-                playerY = 500;
+                playerY = 80; // Closer to top
                 break;
             case 'down':
                 playerX = 400;
-                playerY = 100;
+                playerY = 520; // Closer to bottom
                 break;
             case 'left':
-                playerX = 700;
+                playerX = 80; // Closer to left
                 playerY = 300;
                 break;
             case 'right':
-                playerX = 100;
+                playerX = 720; // Closer to right
                 playerY = 300;
                 break;
         }
@@ -437,6 +514,7 @@ class MainGameScene extends Phaser.Scene {
         enemy.speed = type === 'boss' ? 80 : 50;
         enemy.shootCooldown = type === 'boss' ? 1000 : 2000;
         enemy.lastShootTime = 0;
+        enemy.setCollideWorldBounds(true); // Keep enemies inside the game area
         return enemy;
     }
 
@@ -497,6 +575,7 @@ class MainGameScene extends Phaser.Scene {
 
     showCoinDrop(x, y) {
         const sparkle = this.add.sprite(x, y, 'gold_sparkles');
+        sparkle.setDepth(5); // Above floor, below player
         this.time.delayedCall(500, () => sparkle.destroy());
         this.coins += 1;
         this.coinsText.setText(`Coins: ${this.coins}`);
@@ -516,6 +595,7 @@ class MainGameScene extends Phaser.Scene {
             // Show level transition message
             const transitionText = this.add.text(400, 300, `Entering World ${this.currentWorld}!`, 
                 { font: '32px Arial', fill: '#ffffff', backgroundColor: '#000000' }).setOrigin(0.5);
+            transitionText.setDepth(200); // Make sure it's visible above everything
             
             // Load the starting room after a short delay
             this.time.delayedCall(2000, () => {
@@ -526,6 +606,7 @@ class MainGameScene extends Phaser.Scene {
             // Player has beaten the final boss - show victory
             const victoryText = this.add.text(400, 300, 'Victory! You have conquered The Forsaken Depths!', 
                 { font: '24px Arial', fill: '#ffffff', backgroundColor: '#000000' }).setOrigin(0.5);
+            victoryText.setDepth(200); // Make sure it's visible above everything
                 
             // Return to title after delay
             this.time.delayedCall(5000, () => {
