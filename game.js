@@ -26,6 +26,13 @@ class TitleScene extends Phaser.Scene {
 class MainGameScene extends Phaser.Scene {
     constructor() {
         super({ key: 'MainGameScene' });
+        // World/level progression system
+        this.currentWorld = 1;
+        this.maxWorlds = 3;
+        // Room tracking
+        this.currentRoom = { x: 0, y: 0 };
+        this.visitedRooms = {};
+        this.roomMap = {};
     }
 
     preload() {
@@ -42,6 +49,9 @@ class MainGameScene extends Phaser.Scene {
         this.load.image('heart_full', 'assets/heart_full.png');
         this.load.image('heart_half', 'assets/heart_half.png');
         this.load.image('heart_empty', 'assets/heart_empty.png');
+        this.load.image('wall1', 'assets/wall.png');
+        this.load.image('wall2', 'assets/wall.png');
+        this.load.image('wall3', 'assets/wall.png');
     }
 
     create() {
@@ -54,15 +64,12 @@ class MainGameScene extends Phaser.Scene {
         this.shootCooldown = 200;
 
         this.walls = this.physics.add.staticGroup();
-        this.walls.create(400, 16, 'wall').setScale(25, 1).refreshBody();
-        this.walls.create(400, 584, 'wall').setScale(25, 1).refreshBody();
-        this.walls.create(16, 300, 'wall').setScale(1, 19).refreshBody();
-        this.walls.create(784, 300, 'wall').setScale(1, 19).refreshBody();
-        this.physics.add.collider(this.player, this.walls);
-
         this.innerWalls = this.physics.add.staticGroup();
         this.enemies = this.physics.add.group();
         this.enemyProjectiles = this.physics.add.group();
+        this.doors = this.physics.add.staticGroup();
+        this.boss = null;
+        this.isBossRoom = false;
 
         // Add projectiles group here
         this.projectiles = this.physics.add.group();
@@ -72,6 +79,10 @@ class MainGameScene extends Phaser.Scene {
             enemy.health -= 10; // Adjust damage value as needed
             if (enemy.health <= 0) {
                 this.showCoinDrop(enemy.x, enemy.y);
+                // Check if boss was killed
+                if (enemy.type === 'boss') {
+                    this.onBossDefeated();
+                }
                 enemy.destroy();
             }
             projectile.destroy();
@@ -84,6 +95,7 @@ class MainGameScene extends Phaser.Scene {
 
         this.coins = 0;
         this.coinsText = this.add.text(16, 64, 'Coins: 0', { fontSize: '32px', fill: '#fff' });
+        this.worldText = this.add.text(670, 32, `World: ${this.currentWorld}`, { fontSize: '24px', fill: '#fff' });
 
         // Set up movement keys (WASD)
         this.keyW = this.input.keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.W);
@@ -98,7 +110,11 @@ class MainGameScene extends Phaser.Scene {
         this.keyDown = this.input.keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.DOWN);
 
         this.roomActive = false;
-        this.loadRoom();
+        
+        // Generate initial map for this world
+        this.generateWorldMap();
+        // Load the starting room
+        this.loadRoom(this.currentRoom.x, this.currentRoom.y);
 
         this.physics.add.collider(this.player, this.enemies, (player, enemy) => this.takeDamage(player));
         this.physics.add.overlap(this.player, this.enemyProjectiles, (player, projectile) => {
@@ -130,7 +146,11 @@ class MainGameScene extends Phaser.Scene {
 
         if (this.roomActive && this.enemies.countActive() === 0) {
             this.roomActive = false;
-            if (this.door) this.door.setTexture('door_open');
+            // Open all doors when enemies are cleared
+            this.doors.children.iterate(door => {
+                door.setTexture('door_open');
+                door.isOpen = true;
+            });
         }
         
         // Check for arrow key shooting
@@ -176,36 +196,244 @@ class MainGameScene extends Phaser.Scene {
         }
     }
 
-    loadRoom() {
+    generateWorldMap() {
+        // Clear the existing map
+        this.roomMap = {};
+        this.visitedRooms = {};
+        
+        // Generate a random map with 5-8 rooms per world
+        const numRooms = Phaser.Math.Between(5, 8);
+        let roomsCreated = 0;
+        
+        // Start with a room at (0,0)
+        this.roomMap['0,0'] = { 
+            type: 'normal',
+            visited: false,
+            doors: {}
+        };
+        
+        // Queue of rooms to process (ensure connected graph)
+        let queue = [{x: 0, y: 0}];
+        
+        while (roomsCreated < numRooms && queue.length > 0) {
+            // Get a random room from the queue
+            const randomIndex = Math.floor(Math.random() * queue.length);
+            const currentRoom = queue[randomIndex];
+            queue.splice(randomIndex, 1);
+            
+            // Possible directions
+            const directions = [
+                {x: 0, y: -1, dir: 'up'},
+                {x: 1, y: 0, dir: 'right'},
+                {x: 0, y: 1, dir: 'down'},
+                {x: -1, y: 0, dir: 'left'}
+            ];
+            
+            // Shuffle directions
+            Phaser.Utils.Array.Shuffle(directions);
+            
+            // Try to create doors in random directions
+            for (const direction of directions) {
+                const newRoomX = currentRoom.x + direction.x;
+                const newRoomY = currentRoom.y + direction.y;
+                const newRoomKey = `${newRoomX},${newRoomY}`;
+                
+                // If this room position doesn't exist yet
+                if (!this.roomMap[newRoomKey] && roomsCreated < numRooms) {
+                    // Create the new room
+                    let roomType = 'normal';
+                    if (roomsCreated === numRooms - 1) {
+                        // Last room is the boss room
+                        roomType = 'boss';
+                    }
+                    
+                    this.roomMap[newRoomKey] = {
+                        type: roomType,
+                        visited: false,
+                        doors: {}
+                    };
+                    
+                    // Create doors between rooms
+                    const oppositeDir = {
+                        'up': 'down',
+                        'right': 'left',
+                        'down': 'up',
+                        'left': 'right'
+                    };
+                    
+                    // Add door to current room
+                    this.roomMap[`${currentRoom.x},${currentRoom.y}`].doors[direction.dir] = newRoomKey;
+                    
+                    // Add door to new room
+                    this.roomMap[newRoomKey].doors[oppositeDir[direction.dir]] = `${currentRoom.x},${currentRoom.y}`;
+                    
+                    // Add new room to queue
+                    queue.push({x: newRoomX, y: newRoomY});
+                    
+                    roomsCreated++;
+                }
+                
+                // If we've reached our target number of rooms, break
+                if (roomsCreated >= numRooms) break;
+            }
+        }
+        
+        // Set the current room to the starting room
+        this.currentRoom = {x: 0, y: 0};
+        
+        console.log("Generated map with " + roomsCreated + " rooms for world " + this.currentWorld);
+    }
+
+    loadRoom(x, y) {
+        // Clear existing room elements
         this.enemies.clear(true, true);
         this.enemyProjectiles.clear(true, true);
         this.innerWalls.clear(true, true);
-        if (this.door) this.door.destroy();
-
-        this.enemies.add(this.createEnemy('blob', 200, 200));
-        this.enemies.add(this.createEnemy('boss', 600, 400));
-        this.roomActive = true;
-
-        for (let i = 0; i < 5; i++) {
+        this.walls.clear(true, true);
+        this.doors.clear(true, true);
+        
+        // Set the current room
+        this.currentRoom = {x, y};
+        const roomKey = `${x},${y}`;
+        
+        // Mark room as visited
+        this.roomMap[roomKey].visited = true;
+        this.visitedRooms[roomKey] = true;
+        
+        // Check if this is a boss room
+        this.isBossRoom = this.roomMap[roomKey].type === 'boss';
+        
+        // Create the outer walls
+        this.walls.create(400, 16, `wall${this.currentWorld}`).setScale(25, 1).refreshBody();
+        this.walls.create(400, 584, `wall${this.currentWorld}`).setScale(25, 1).refreshBody();
+        this.walls.create(16, 300, `wall${this.currentWorld}`).setScale(1, 19).refreshBody();
+        this.walls.create(784, 300, `wall${this.currentWorld}`).setScale(1, 19).refreshBody();
+        
+        // Add doors based on the room's connections
+        const roomData = this.roomMap[roomKey];
+        if (roomData) {
+            if (roomData.doors.up) {
+                const door = this.physics.add.sprite(400, 32, 'door_closed');
+                door.direction = 'up';
+                door.targetRoom = roomData.doors.up;
+                door.isOpen = !this.roomActive;
+                this.doors.add(door);
+            }
+            
+            if (roomData.doors.down) {
+                const door = this.physics.add.sprite(400, 568, 'door_closed');
+                door.direction = 'down';
+                door.targetRoom = roomData.doors.down;
+                door.isOpen = !this.roomActive;
+                this.doors.add(door);
+            }
+            
+            if (roomData.doors.left) {
+                const door = this.physics.add.sprite(32, 300, 'door_closed');
+                door.direction = 'left';
+                door.targetRoom = roomData.doors.left;
+                door.isOpen = !this.roomActive;
+                this.doors.add(door);
+            }
+            
+            if (roomData.doors.right) {
+                const door = this.physics.add.sprite(768, 300, 'door_closed');
+                door.direction = 'right';
+                door.targetRoom = roomData.doors.right;
+                door.isOpen = !this.roomActive;
+                this.doors.add(door);
+            }
+        }
+        
+        // Add enemies based on room type
+        if (this.isBossRoom) {
+            // Add a powerful boss in boss rooms
+            this.boss = this.createEnemy('boss', 400, 300);
+            this.boss.health = 100 * this.currentWorld; // Scale boss health with world
+            this.boss.scale = 1.5; // Make the boss bigger
+            this.enemies.add(this.boss);
+        } else {
+            // Add random enemies in normal rooms
+            const enemyCount = Phaser.Math.Between(2, 4 + this.currentWorld);
+            for (let i = 0; i < enemyCount; i++) {
+                const x = Phaser.Math.Between(100, 700);
+                const y = Phaser.Math.Between(100, 500);
+                this.enemies.add(this.createEnemy('blob', x, y));
+            }
+        }
+        
+        // Add random inner walls
+        const wallCount = Phaser.Math.Between(3, 7);
+        for (let i = 0; i < wallCount; i++) {
             const x = Phaser.Math.Between(100, 700);
             const y = Phaser.Math.Between(100, 500);
-            this.innerWalls.create(x, y, 'wall').setScale(2, 1).refreshBody();
+            const rotation = Phaser.Math.Between(0, 1) ? 0 : Math.PI / 2; // Horizontal or vertical
+            const wall = this.innerWalls.create(x, y, `wall${this.currentWorld}`);
+            wall.rotation = rotation;
+            wall.setScale(Phaser.Math.Between(1, 3), 1).refreshBody();
         }
+        
+        // Set up room collisions
+        this.physics.add.collider(this.player, this.walls);
         this.physics.add.collider(this.player, this.innerWalls);
         this.physics.add.collider(this.enemies, this.innerWalls);
+        this.physics.add.collider(this.enemies, this.walls);
         this.physics.add.collider(this.projectiles, this.innerWalls, (projectile) => projectile.destroy());
         this.physics.add.collider(this.projectiles, this.walls, (projectile) => projectile.destroy());
-
-        this.door = this.physics.add.sprite(400, 568, 'door_closed');
-        this.physics.add.overlap(this.player, this.door, () => {
-            if (!this.roomActive) this.loadRoom();
+        
+        // Door overlap detection
+        this.physics.add.overlap(this.player, this.doors, (player, door) => {
+            if (door.isOpen) {
+                const [targetX, targetY] = door.targetRoom.split(',').map(Number);
+                this.transitionToRoom(targetX, targetY, door.direction);
+            }
         });
+        
+        // Set room as active (doors locked until enemies are cleared)
+        this.roomActive = this.enemies.countActive() > 0;
+        
+        // Update doors appearance based on room state
+        this.doors.children.iterate(door => {
+            door.setTexture(this.roomActive ? 'door_closed' : 'door_open');
+        });
+    }
+
+    transitionToRoom(x, y, fromDirection) {
+        // Set player position based on entry direction
+        let playerX = 400;
+        let playerY = 300;
+        
+        switch (fromDirection) {
+            case 'up':
+                playerX = 400;
+                playerY = 500;
+                break;
+            case 'down':
+                playerX = 400;
+                playerY = 100;
+                break;
+            case 'left':
+                playerX = 700;
+                playerY = 300;
+                break;
+            case 'right':
+                playerX = 100;
+                playerY = 300;
+                break;
+        }
+        
+        // Load the new room
+        this.loadRoom(x, y);
+        
+        // Position the player
+        this.player.x = playerX;
+        this.player.y = playerY;
     }
 
     createEnemy(type, x, y) {
         const enemy = this.physics.add.sprite(x, y, type);
         enemy.type = type;
-        enemy.health = type === 'boss' ? 50 : 20;
+        enemy.health = type === 'boss' ? 50 * this.currentWorld : 20 * this.currentWorld;
         enemy.speed = type === 'boss' ? 80 : 50;
         enemy.shootCooldown = type === 'boss' ? 1000 : 2000;
         enemy.lastShootTime = 0;
@@ -216,7 +444,32 @@ class MainGameScene extends Phaser.Scene {
         const texture = enemy.type === 'boss' ? 'boss_projectile' : 'blob_projectile';
         const projectile = this.physics.add.sprite(enemy.x, enemy.y, texture);
         this.enemyProjectiles.add(projectile);
-        this.physics.moveToObject(projectile, this.player, 200);
+        
+        // Boss shoots multiple projectiles in different directions
+        if (enemy.type === 'boss') {
+            if (this.currentWorld >= 2) {
+                // Multiple projectiles for higher worlds
+                const angles = [0, Math.PI/4, Math.PI/2, 3*Math.PI/4, Math.PI, 5*Math.PI/4, 3*Math.PI/2, 7*Math.PI/4];
+                const projCount = this.currentWorld === 2 ? 4 : 8; // 4 for world 2, 8 for world 3
+                
+                for (let i = 0; i < projCount; i++) {
+                    const angle = angles[i];
+                    const speed = 200;
+                    const proj = this.enemyProjectiles.create(enemy.x, enemy.y, texture);
+                    proj.setVelocity(Math.cos(angle) * speed, Math.sin(angle) * speed);
+                }
+                
+                // Normal homing projectile
+                this.physics.moveToObject(projectile, this.player, 200);
+            } else {
+                // Just one homing projectile for world 1
+                this.physics.moveToObject(projectile, this.player, 200);
+            }
+        } else {
+            // Regular enemies just shoot at player
+            this.physics.moveToObject(projectile, this.player, 200);
+        }
+        
         this.physics.add.collider(projectile, this.walls, () => projectile.destroy());
         this.physics.add.collider(projectile, this.innerWalls, () => projectile.destroy());
     }
@@ -247,6 +500,38 @@ class MainGameScene extends Phaser.Scene {
         this.time.delayedCall(500, () => sparkle.destroy());
         this.coins += 1;
         this.coinsText.setText(`Coins: ${this.coins}`);
+    }
+    
+    onBossDefeated() {
+        console.log("Boss defeated in world " + this.currentWorld);
+        
+        // Advance to the next world if not at max
+        if (this.currentWorld < this.maxWorlds) {
+            this.currentWorld++;
+            this.worldText.setText(`World: ${this.currentWorld}`);
+            
+            // Generate a new map for the next world
+            this.generateWorldMap();
+            
+            // Show level transition message
+            const transitionText = this.add.text(400, 300, `Entering World ${this.currentWorld}!`, 
+                { font: '32px Arial', fill: '#ffffff', backgroundColor: '#000000' }).setOrigin(0.5);
+            
+            // Load the starting room after a short delay
+            this.time.delayedCall(2000, () => {
+                transitionText.destroy();
+                this.loadRoom(0, 0);
+            });
+        } else {
+            // Player has beaten the final boss - show victory
+            const victoryText = this.add.text(400, 300, 'Victory! You have conquered The Forsaken Depths!', 
+                { font: '24px Arial', fill: '#ffffff', backgroundColor: '#000000' }).setOrigin(0.5);
+                
+            // Return to title after delay
+            this.time.delayedCall(5000, () => {
+                this.scene.start('TitleScene');
+            });
+        }
     }
 }
 
