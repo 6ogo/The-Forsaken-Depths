@@ -33,6 +33,8 @@ class MainGameScene extends Phaser.Scene {
         this.currentRoom = { x: 0, y: 0 };
         this.visitedRooms = {};
         this.roomMap = {};
+        // Initialize coins variable
+        this.coins = 0;
     }
 
     preload() {
@@ -55,6 +57,12 @@ class MainGameScene extends Phaser.Scene {
     }
 
     create() {
+        // Define game boundaries - play area slightly smaller than full canvas
+        this.playAreaX1 = 60;
+        this.playAreaY1 = 60;
+        this.playAreaX2 = 740;
+        this.playAreaY2 = 540;
+        
         // Setup gameplay area with borders
         this.walls = this.physics.add.staticGroup();
         this.innerWalls = this.physics.add.staticGroup();
@@ -129,17 +137,19 @@ class MainGameScene extends Phaser.Scene {
         this.uiContainer = this.add.container(0, 0);
         this.uiContainer.setDepth(100); // Ensure UI is always on top
         
-        // Add hearts
+        // Add hearts - moved inside the play area
         this.hearts = [];
         for (let i = 0; i < 3; i++) {
-            const heart = this.add.image(32 + i * 64, 32, 'heart_full');
+            const heart = this.add.image(100 + i * 48, 100, 'heart_full');
             this.hearts.push(heart);
             this.uiContainer.add(heart);
         }
 
-        // Add other UI elements
-        this.coinsText = this.add.text(16, 64, 'Coins: 0', { fontSize: '32px', fill: '#fff' });
-        this.worldText = this.add.text(670, 32, `World: ${this.currentWorld}`, { fontSize: '24px', fill: '#fff' });
+        // Add other UI elements - moved inside the play area
+        this.coinsText = this.add.text(100, 140, `Coins: ${this.coins}`, { fontSize: '28px', fill: '#fff' });
+        
+        // Move world text to bottom left
+        this.worldText = this.add.text(100, 500, `World: ${this.currentWorld}`, { fontSize: '24px', fill: '#fff' });
         
         // Add texts to UI container
         this.uiContainer.add(this.coinsText);
@@ -358,49 +368,81 @@ class MainGameScene extends Phaser.Scene {
         // Check if this is a boss room
         this.isBossRoom = this.roomMap[roomKey].type === 'boss';
         
-        // Create the outer walls
-        this.walls.create(400, 16, `wall${this.currentWorld}`).setScale(25, 1).refreshBody();
-        this.walls.create(400, 584, `wall${this.currentWorld}`).setScale(25, 1).refreshBody();
-        this.walls.create(16, 300, `wall${this.currentWorld}`).setScale(1, 19).refreshBody();
-        this.walls.create(784, 300, `wall${this.currentWorld}`).setScale(1, 19).refreshBody();
+        // Create the outer walls (adjusted to create a visible border)
+        this.walls.create(400, this.playAreaY1, `wall${this.currentWorld}`).setScale(25, 1).refreshBody();
+        this.walls.create(400, this.playAreaY2, `wall${this.currentWorld}`).setScale(25, 1).refreshBody();
+        this.walls.create(this.playAreaX1, 300, `wall${this.currentWorld}`).setScale(1, 19).refreshBody();
+        this.walls.create(this.playAreaX2, 300, `wall${this.currentWorld}`).setScale(1, 19).refreshBody();
         
         // Add doors based on the room's connections
         const roomData = this.roomMap[roomKey];
         if (roomData) {
             if (roomData.doors.up) {
-                const door = this.physics.add.sprite(400, 32, 'door_closed');
+                const door = this.physics.add.sprite(400, this.playAreaY1, 'door_closed');
                 door.direction = 'up';
                 door.targetRoom = roomData.doors.up;
                 door.isOpen = !this.roomActive;
                 door.setOrigin(0.5, 0);
+                door.setInteractive();
                 this.doors.add(door);
+                
+                // Add collider to prevent going through closed doors
+                const doorCollider = this.physics.add.collider(this.player, door, null, () => {
+                    // Only allow collision if door is closed
+                    return !door.isOpen;
+                }, this);
+                door.doorCollider = doorCollider;
             }
             
             if (roomData.doors.down) {
-                const door = this.physics.add.sprite(400, 568, 'door_closed');
+                const door = this.physics.add.sprite(400, this.playAreaY2, 'door_closed');
                 door.direction = 'down';
                 door.targetRoom = roomData.doors.down;
                 door.isOpen = !this.roomActive;
                 door.setOrigin(0.5, 1);
+                door.setInteractive();
                 this.doors.add(door);
+                
+                // Add collider to prevent going through closed doors
+                const doorCollider = this.physics.add.collider(this.player, door, null, () => {
+                    // Only allow collision if door is closed
+                    return !door.isOpen;
+                }, this);
+                door.doorCollider = doorCollider;
             }
             
             if (roomData.doors.left) {
-                const door = this.physics.add.sprite(32, 300, 'door_closed');
+                const door = this.physics.add.sprite(this.playAreaX1, 300, 'door_closed');
                 door.direction = 'left';
                 door.targetRoom = roomData.doors.left;
                 door.isOpen = !this.roomActive;
                 door.setOrigin(0, 0.5);
+                door.setInteractive();
                 this.doors.add(door);
+                
+                // Add collider to prevent going through closed doors
+                const doorCollider = this.physics.add.collider(this.player, door, null, () => {
+                    // Only allow collision if door is closed
+                    return !door.isOpen;
+                }, this);
+                door.doorCollider = doorCollider;
             }
             
             if (roomData.doors.right) {
-                const door = this.physics.add.sprite(768, 300, 'door_closed');
+                const door = this.physics.add.sprite(this.playAreaX2, 300, 'door_closed');
                 door.direction = 'right';
                 door.targetRoom = roomData.doors.right;
                 door.isOpen = !this.roomActive;
                 door.setOrigin(1, 0.5);
+                door.setInteractive();
                 this.doors.add(door);
+                
+                // Add collider to prevent going through closed doors
+                const doorCollider = this.physics.add.collider(this.player, door, null, () => {
+                    // Only allow collision if door is closed
+                    return !door.isOpen;
+                }, this);
+                door.doorCollider = doorCollider;
             }
         }
         
@@ -415,8 +457,8 @@ class MainGameScene extends Phaser.Scene {
             // Add random enemies in normal rooms
             const enemyCount = Phaser.Math.Between(2, 4 + this.currentWorld);
             for (let i = 0; i < enemyCount; i++) {
-                const x = Phaser.Math.Between(100, 700);
-                const y = Phaser.Math.Between(100, 500);
+                const x = Phaser.Math.Between(this.playAreaX1 + 50, this.playAreaX2 - 50);
+                const y = Phaser.Math.Between(this.playAreaY1 + 50, this.playAreaY2 - 50);
                 this.enemies.add(this.createEnemy('blob', x, y));
             }
         }
@@ -424,8 +466,8 @@ class MainGameScene extends Phaser.Scene {
         // Add random inner walls
         const wallCount = Phaser.Math.Between(3, 7);
         for (let i = 0; i < wallCount; i++) {
-            const x = Phaser.Math.Between(100, 700);
-            const y = Phaser.Math.Between(100, 500);
+            const x = Phaser.Math.Between(this.playAreaX1 + 50, this.playAreaX2 - 50);
+            const y = Phaser.Math.Between(this.playAreaY1 + 50, this.playAreaY2 - 50);
             const rotation = Phaser.Math.Between(0, 1) ? 0 : Math.PI / 2; // Horizontal or vertical
             const wall = this.innerWalls.create(x, y, `wall${this.currentWorld}`);
             wall.rotation = rotation;
@@ -483,18 +525,18 @@ class MainGameScene extends Phaser.Scene {
         switch (oppositeDirection[fromDirection]) {
             case 'up':
                 playerX = 400;
-                playerY = 80; // Closer to top
+                playerY = this.playAreaY1 + 50; // Closer to top
                 break;
             case 'down':
                 playerX = 400;
-                playerY = 520; // Closer to bottom
+                playerY = this.playAreaY2 - 50; // Closer to bottom
                 break;
             case 'left':
-                playerX = 80; // Closer to left
+                playerX = this.playAreaX1 + 50; // Closer to left
                 playerY = 300;
                 break;
             case 'right':
-                playerX = 720; // Closer to right
+                playerX = this.playAreaX2 - 50; // Closer to right
                 playerY = 300;
                 break;
         }
@@ -577,7 +619,9 @@ class MainGameScene extends Phaser.Scene {
         const sparkle = this.add.sprite(x, y, 'gold_sparkles');
         sparkle.setDepth(5); // Above floor, below player
         this.time.delayedCall(500, () => sparkle.destroy());
-        this.coins += 1;
+        
+        // Update coins counter
+        this.coins++;
         this.coinsText.setText(`Coins: ${this.coins}`);
     }
     
