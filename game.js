@@ -454,7 +454,6 @@ class MainGameScene extends Phaser.Scene {
 
         // Update doors appearance
         this.doors.children.iterate(door => {
-            
             // Remember the target room
             const [targetX, targetY] = door.targetRoom.split(',').map(Number);
             const targetRoomKey = `${targetX},${targetY}`;
@@ -496,17 +495,6 @@ class MainGameScene extends Phaser.Scene {
                 // Store reference to glow for cleanup
                 door.glowEffect = glow;
             }
-
-            door.isOpen = !this.roomActive || isShop;
-
-            // Ensure doors can't be used while room is active
-            if (door.doorCollider) {
-                this.physics.world.removeCollider(door.doorCollider);
-            }
-            door.doorCollider = this.physics.add.collider(this.player, door, null, () => {
-                // Allow passage if room is cleared (not active) or it's a shop door
-                return !this.roomActive || isShop;
-            }, this);
         });
     }
 
@@ -627,24 +615,25 @@ class MainGameScene extends Phaser.Scene {
         this.physics.add.collider(this.enemyProjectiles, this.walls, (projectile) => projectile.destroy());
         this.physics.add.collider(this.enemyProjectiles, this.innerWalls, (projectile) => projectile.destroy());
 
-        // Add door interaction
+        // Add door interaction using overlap instead of collider
         this.doors.children.iterate(door => {
             // Remove existing collider if it exists
             if (door.doorCollider) {
                 this.physics.world.removeCollider(door.doorCollider);
             }
 
-            // Create new collider
+            // Create new overlap detection
             door.doorCollider = this.physics.add.overlap(this.player, door, (player, door) => {
-                // Only allow transition if door is open (room cleared or shop)
+                console.log("Door overlap detected. Door isOpen:", door.isOpen);
+                // Only allow transition if door is open
                 if (door.isOpen) {
+                    console.log("Transitioning to room:", door.targetRoom);
                     const [targetX, targetY] = door.targetRoom.split(',').map(Number);
                     this.transitionToRoom(targetX, targetY, door.direction);
                 }
-            }, null, this);
+            });
         });
     }
-
 
     transitionToRoom(x, y, fromDirection) {
         // Set player position based on entry direction
