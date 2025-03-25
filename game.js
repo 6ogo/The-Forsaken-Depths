@@ -155,7 +155,16 @@ class MainGameScene extends Phaser.Scene {
         // Add texts to UI container
         this.uiContainer.add(this.coinsText);
         this.uiContainer.add(this.worldText);
+
+        // Add door interaction text (initially hidden)
+        this.doorPrompt = this.add.text(400, 200, 'Press E to open door',
+            { fontSize: '18px', fill: '#fff', backgroundColor: '#333', padding: { x: 5, y: 2 } });
+        this.doorPrompt.setOrigin(0.5);
+        this.doorPrompt.setDepth(101); // Above other UI
+        this.doorPrompt.visible = false;
+        this.uiContainer.add(this.doorPrompt);
     }
+
 
     update(time) {
         this.player.setVelocity(0);
@@ -176,6 +185,7 @@ class MainGameScene extends Phaser.Scene {
             }
         });
 
+        // Handle room clearing
         if (this.roomActive && this.enemies.countActive() === 0) {
             console.log("Room cleared! Opening doors.");
             this.roomActive = false;
@@ -189,6 +199,62 @@ class MainGameScene extends Phaser.Scene {
             });
         }
 
+        // DOOR INTERACTION LOGIC
+        // Reset at beginning of frame
+        let foundDoorInRange = false;
+
+        // Check all doors for proximity
+        this.doors.children.iterate(door => {
+            // Check distance between player and door
+            const dist = Phaser.Math.Distance.Between(this.player.x, this.player.y, door.x, door.y);
+            if (dist < 40) { // Player is within 40 pixels of door
+                foundDoorInRange = true;
+
+                // Update door prompt position
+                this.doorPrompt.x = door.x;
+                this.doorPrompt.y = door.y - 40; // Position above door
+
+                if (!door.isOpen) {
+                    // For closed doors, show "Press E to open door"
+                    // Only show if room is cleared (no enemies) or it's a shop
+                    const isShop = this.roomMap[door.targetRoom].type === 'shop';
+                    if (!this.roomActive || isShop) {
+                        this.doorPrompt.setText('Press E to open door');
+                        this.doorPrompt.visible = true;
+
+                        // Handle E key press to open door
+                        if (Phaser.Input.Keyboard.JustDown(this.keyE)) {
+                            console.log("Opening door to:", door.targetRoom);
+                            door.setTexture('door_open');
+                            door.isOpen = true;
+                        }
+                    } else {
+                        // Room has enemies, don't show prompt
+                        this.doorPrompt.visible = false;
+                    }
+                } else {
+                    // For open doors, allow walking through immediately
+                    const [targetX, targetY] = door.targetRoom.split(',').map(Number);
+
+                    // Only transition once when walking through
+                    if (!door.transitionInProgress) {
+                        // Check if player is very close to the door and moving toward it
+                        const isCrossing = this.isPlayerCrossingDoor(door);
+                        if (isCrossing) {
+                            console.log("Transitioning through open door to:", door.targetRoom);
+                            door.transitionInProgress = true;
+                            this.transitionToRoom(targetX, targetY, door.direction);
+                        }
+                    }
+                }
+            }
+        });
+
+        // Hide prompt if no door in range
+        if (!foundDoorInRange) {
+            this.doorPrompt.visible = false;
+        }
+
         // Check for arrow key shooting
         if (this.keyLeft.isDown) {
             this.shoot('left');
@@ -198,6 +264,22 @@ class MainGameScene extends Phaser.Scene {
             this.shoot('up');
         } else if (this.keyDown.isDown) {
             this.shoot('down');
+        }
+    }
+
+    isPlayerCrossingDoor(door) {
+        // Different logic based on door direction
+        switch (door.direction) {
+            case 'up':
+                return this.player.y <= door.y + 5 && this.keyW.isDown;
+            case 'down':
+                return this.player.y >= door.y - 5 && this.keyS.isDown;
+            case 'left':
+                return this.player.x <= door.x + 5 && this.keyA.isDown;
+            case 'right':
+                return this.player.x >= door.x - 5 && this.keyD.isDown;
+            default:
+                return false;
         }
     }
 
@@ -522,6 +604,19 @@ class MainGameScene extends Phaser.Scene {
             const door = this.physics.add.sprite(x, y, 'door_closed');
             door.direction = direction;
             door.targetRoom = targetRoomKey;
+
+            // Important: Set door body size and offset for better collision detection
+            if (direction === 'up' || direction === 'down') {
+                // Horizontal doors (top/bottom of room)
+                door.body.setSize(80, 20); // Wider but shorter body
+            } else {
+                // Vertical doors (left/right of room)
+                door.body.setSize(20, 80); // Taller but narrower body
+            }
+
+            // Add property to track if transition is in progress
+            door.transitionInProgress = false;
+
             this.doors.add(door);
         });
     }
@@ -603,76 +698,87 @@ class MainGameScene extends Phaser.Scene {
     }
 
     setupCollisions() {
-        // Set up room collisions
+        // Basic collisions remain the same
         this.physics.add.collider(this.player, this.walls);
         this.physics.add.collider(this.player, this.innerWalls);
         this.physics.add.collider(this.enemies, this.innerWalls);
         this.physics.add.collider(this.enemies, this.walls);
         this.physics.add.collider(this.projectiles, this.innerWalls, (projectile) => projectile.destroy());
         this.physics.add.collider(this.projectiles, this.walls, (projectile) => projectile.destroy());
-
-        // Update enemy projectile collisions
         this.physics.add.collider(this.enemyProjectiles, this.walls, (projectile) => projectile.destroy());
         this.physics.add.collider(this.enemyProjectiles, this.innerWalls, (projectile) => projectile.destroy());
 
-        // Add door interaction using overlap instead of collider
+        // Use key press 'E' for door interaction
+        this.keyE = this.input.keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.E);
+
+        // Create door interaction without using a collider - visual feedback only
+        this.doorInRange = null;
+
+        // Add overlap to detect when player is near a door
         this.doors.children.iterate(door => {
             // Remove existing collider if it exists
             if (door.doorCollider) {
                 this.physics.world.removeCollider(door.doorCollider);
             }
 
-            // Create new overlap detection
+            // Create new overlap for door proximity detection
             door.doorCollider = this.physics.add.overlap(this.player, door, (player, door) => {
-                console.log("Door overlap detected. Door isOpen:", door.isOpen);
-                // Only allow transition if door is open
-                if (door.isOpen) {
-                    console.log("Transitioning to room:", door.targetRoom);
-                    const [targetX, targetY] = door.targetRoom.split(',').map(Number);
-                    this.transitionToRoom(targetX, targetY, door.direction);
-                }
+                // Store the current door in range
+                this.doorInRange = door;
             });
         });
+
+        // Add E key for door interaction
+        this.keyE = this.input.keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.E);
     }
 
+
     transitionToRoom(x, y, fromDirection) {
-        // Set player position based on entry direction
-        let playerX = 400;
-        let playerY = 300;
+        console.log(`Transitioning to room at (${x},${y}) from ${fromDirection} direction`);
 
-        // Position player on opposite side of the door they entered
-        const oppositeDirection = {
-            'up': 'down',
-            'down': 'up',
-            'left': 'right',
-            'right': 'left'
-        };
+        // Create brief fade effect
+        this.cameras.main.fadeOut(250);
 
-        switch (oppositeDirection[fromDirection]) {
-            case 'up':
-                playerX = 400;
-                playerY = this.playAreaY1 + 50; // Closer to top
-                break;
-            case 'down':
-                playerX = 400;
-                playerY = this.playAreaY2 - 50; // Closer to bottom
-                break;
-            case 'left':
-                playerX = this.playAreaX1 + 50; // Closer to left
-                playerY = 300;
-                break;
-            case 'right':
-                playerX = this.playAreaX2 - 50; // Closer to right
-                playerY = 300;
-                break;
-        }
+        // Delay the actual room change until fade completes
+        this.time.delayedCall(250, () => {
+            // Position player based on entry direction
+            let playerX = 400;
+            let playerY = 300;
 
-        // Load the new room
-        this.loadRoom(x, y);
+            // Position player on opposite side of where they entered
+            const oppositeDirection = {
+                'up': 'down', 'down': 'up', 'left': 'right', 'right': 'left'
+            };
 
-        // Position the player
-        this.player.x = playerX;
-        this.player.y = playerY;
+            switch (oppositeDirection[fromDirection]) {
+                case 'up':
+                    playerX = 400;
+                    playerY = this.playAreaY1 + 50; // Closer to top
+                    break;
+                case 'down':
+                    playerX = 400;
+                    playerY = this.playAreaY2 - 50; // Closer to bottom
+                    break;
+                case 'left':
+                    playerX = this.playAreaX1 + 50; // Closer to left
+                    playerY = 300;
+                    break;
+                case 'right':
+                    playerX = this.playAreaX2 - 50; // Closer to right
+                    playerY = 300;
+                    break;
+            }
+
+            // Load the new room
+            this.loadRoom(x, y);
+
+            // Position the player
+            this.player.x = playerX;
+            this.player.y = playerY;
+
+            // Fade back in
+            this.cameras.main.fadeIn(250);
+        });
     }
 
     createEnemy(type, x, y) {
