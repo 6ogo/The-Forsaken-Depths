@@ -177,6 +177,7 @@ class MainGameScene extends Phaser.Scene {
         });
 
         if (this.roomActive && this.enemies.countActive() === 0) {
+            console.log("Room cleared! Opening doors.");
             this.roomActive = false;
             const roomKey = `${this.currentRoom.x},${this.currentRoom.y}`;
             this.clearedRooms.add(roomKey);
@@ -273,9 +274,9 @@ class MainGameScene extends Phaser.Scene {
         const minPathLength = 3; // Minimum rooms to exit
         const maxRooms = 8;
 
-        // Initialize starting room
+        // Initialize starting room - CHANGE 'normal' to 'start'
         this.roomMap['0,0'] = {
-            type: 'normal',
+            type: 'start', // Changed from 'normal' to prevent enemies from spawning
             visited: false,
             doors: {},
             depth: currentDepth,
@@ -424,6 +425,9 @@ class MainGameScene extends Phaser.Scene {
 
         // Handle different room types
         switch (room.type) {
+            case 'start':
+                // Starting room has no enemies
+                break;
             case 'shop':
                 this.createShopRoom();
                 break;
@@ -450,10 +454,21 @@ class MainGameScene extends Phaser.Scene {
 
         // Update doors appearance
         this.doors.children.iterate(door => {
-            // Set up base door texture
-            const isShop = this.roomMap[door.targetRoom].type === 'shop';
-            const baseTexture = this.roomActive && !isShop ? 'door_closed' : 'door_open';
+            
+            // Remember the target room
+            const [targetX, targetY] = door.targetRoom.split(',').map(Number);
+            const targetRoomKey = `${targetX},${targetY}`;
+
+            // Set up base door texture - check if room is active and if target is a shop
+            const isShop = this.roomMap[targetRoomKey].type === 'shop';
+            const isCleared = this.clearedRooms.has(`${this.currentRoom.x},${this.currentRoom.y}`);
+
+            // Door is open if the room is cleared or it's the starting room, or if the target is a shop
+            const shouldBeOpen = isCleared || this.roomMap[`${this.currentRoom.x},${this.currentRoom.y}`].type === 'start' || isShop;
+            const baseTexture = shouldBeOpen ? 'door_open' : 'door_closed';
+
             door.setTexture(baseTexture);
+            door.isOpen = shouldBeOpen;
 
             // For shop doors, add gold overlay and glow effect
             if (isShop) {
@@ -611,7 +626,25 @@ class MainGameScene extends Phaser.Scene {
         // Update enemy projectile collisions
         this.physics.add.collider(this.enemyProjectiles, this.walls, (projectile) => projectile.destroy());
         this.physics.add.collider(this.enemyProjectiles, this.innerWalls, (projectile) => projectile.destroy());
+
+        // Add door interaction
+        this.doors.children.iterate(door => {
+            // Remove existing collider if it exists
+            if (door.doorCollider) {
+                this.physics.world.removeCollider(door.doorCollider);
+            }
+
+            // Create new collider
+            door.doorCollider = this.physics.add.overlap(this.player, door, (player, door) => {
+                // Only allow transition if door is open (room cleared or shop)
+                if (door.isOpen) {
+                    const [targetX, targetY] = door.targetRoom.split(',').map(Number);
+                    this.transitionToRoom(targetX, targetY, door.direction);
+                }
+            }, null, this);
+        });
     }
+
 
     transitionToRoom(x, y, fromDirection) {
         // Set player position based on entry direction
