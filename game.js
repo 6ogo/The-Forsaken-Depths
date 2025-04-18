@@ -1,6 +1,6 @@
 // game.js
 
-// Title Scene (Welcome Screen)
+// Title Screen (Welcome Screen)
 class TitleScene extends Phaser.Scene {
   constructor() {
     super({ key: "TitleScene" });
@@ -77,8 +77,11 @@ class MainGameScene extends Phaser.Scene {
   }
 
   create() {
+    // Play area bounds
     this.playArea = { x1: 60, y1: 60, x2: 740, y2: 540 };
     this.inTransition = false;
+
+    // Groups
     this.walls = this.physics.add.staticGroup();
     this.innerWalls = this.physics.add.staticGroup();
     this.doors = this.physics.add.staticGroup();
@@ -86,15 +89,23 @@ class MainGameScene extends Phaser.Scene {
     this.enemyProj = this.physics.add.group();
     this.projectiles = this.physics.add.group();
     this.pickups = this.physics.add.group();
+
+    // UI + minimap
     this.createUI();
     this.minimap = this.add.graphics().setScrollFactor(0).setDepth(101);
+
+    // Player setup
     this.player = this.physics.add.sprite(400, 300, "player").setDepth(10);
     this.player.health = 6;
     this.player.maxHealth = 6;
     this.player.lastDamageTime = 0;
     this.shootCooldown = 200;
     this.lastShootTime = 0;
+
+    // Input
     this.keys = this.input.keyboard.addKeys("W,A,S,D,LEFT,RIGHT,UP,DOWN,E");
+
+    // Collisions
     this.physics.add.overlap(
       this.projectiles,
       this.enemies,
@@ -124,58 +135,69 @@ class MainGameScene extends Phaser.Scene {
       this
     );
     this.input.on("pointerdown", (ptr) => this.shootMouse(ptr));
+
+    // Generate map & load initial room
     this.generateWorldMap();
     this.loadRoom(0, 0);
   }
 
   update(time) {
+    // Movement
     this.player.setVelocity(0);
     if (this.keys.A.isDown) this.player.setVelocityX(-this.playerSpeed);
     if (this.keys.D.isDown) this.player.setVelocityX(this.playerSpeed);
     if (this.keys.W.isDown) this.player.setVelocityY(-this.playerSpeed);
     if (this.keys.S.isDown) this.player.setVelocityY(this.playerSpeed);
-    this.enemies.children.iterate((e) => {
-      if (e.active) this.updateEnemy(e, time);
-    });
+
+    // Enemy AI
+    this.enemies.children.iterate((e) => e.active && this.updateEnemy(e, time));
+
+    // Room clear
     if (this.roomActive && this.enemies.countActive() === 0) {
       this.roomActive = false;
       this.clearedRooms.add(`${this.currentRoom.x},${this.currentRoom.y}`);
       this.openAllDoors();
     }
+
+    // Door interactions
     if (!this.inTransition) {
       let nearDoor = false;
       this.doors.children.iterate((door) => {
-        const dist = Phaser.Math.Distance.Between(
-          this.player.x,
-          this.player.y,
-          door.x,
-          door.y
-        );
-        if (dist < 40) {
+        if (
+          Phaser.Math.Distance.Between(
+            this.player.x,
+            this.player.y,
+            door.x,
+            door.y
+          ) < 40
+        ) {
           nearDoor = true;
           this.handleDoorPrompt(door);
         }
       });
       if (!nearDoor) this.doorPrompt.setVisible(false);
     }
-    const shopKey = `${this.currentRoom.x},${this.currentRoom.y}`;
-    if (this.roomMap[shopKey].type === "shop" && this.shopIcons) {
-      let nearShop = false;
+
+    // Shop prompts
+    const key = `${this.currentRoom.x},${this.currentRoom.y}`;
+    if (this.roomMap[key].type === "shop" && this.shopIcons) {
+      let near = false;
       this.shopIcons.forEach((icon) => {
-        const d = Phaser.Math.Distance.Between(
-          this.player.x,
-          this.player.y,
-          icon.sprite.x,
-          icon.sprite.y
-        );
-        if (d < 40) {
-          nearShop = true;
-          const txt =
+        if (
+          Phaser.Math.Distance.Between(
+            this.player.x,
+            this.player.y,
+            icon.sprite.x,
+            icon.sprite.y
+          ) < 40
+        ) {
+          near = true;
+          const msg =
             icon.type === "heal"
               ? "Press E to heal (10 coins)"
               : "Press E to increase damage (20 coins)";
           this.shopPrompt
-            .setText(txt)
+            .setText(msg)
             .setPosition(icon.sprite.x, icon.sprite.y - 50)
             .setVisible(true);
           if (Phaser.Input.Keyboard.JustDown(this.keys.E)) {
@@ -184,10 +206,12 @@ class MainGameScene extends Phaser.Scene {
           }
         }
       });
-      if (!nearShop) this.shopPrompt.setVisible(false);
+      if (!near) this.shopPrompt.setVisible(false);
     } else {
       this.shopPrompt.setVisible(false);
     }
+
+    // Shooting
     if (this.keys.LEFT.isDown) this.shootDir("left");
     else if (this.keys.RIGHT.isDown) this.shootDir("right");
     else if (this.keys.UP.isDown) this.shootDir("up");
@@ -198,22 +222,22 @@ class MainGameScene extends Phaser.Scene {
     this.ui = this.add.container(0, 0).setDepth(100);
     this.hearts = [];
     for (let i = 0; i < 3; i++) {
-      const heart = this.add.image(100 + 48 * i, 100, "heart_full");
-      this.hearts.push(heart);
-      this.ui.add(heart);
+      const h = this.add.image(100 + 48 * i, 100, "heart_full");
+      this.hearts.push(h);
+      this.ui.add(h);
     }
     this.coinsText = this.add.text(100, 140, "Coins: 0", {
-      fontSize: "28px",
+      font: "28px Arial",
       fill: "#fff",
     });
     this.worldText = this.add.text(100, 180, "World: 1", {
-      fontSize: "24px",
+      font: "24px Arial",
       fill: "#fff",
     });
     this.ui.add([this.coinsText, this.worldText]);
     this.doorPrompt = this.add
       .text(400, 200, "", {
-        fontSize: "18px",
+        font: "18px Arial",
         fill: "#fff",
         backgroundColor: "#333",
         padding: { x: 5, y: 2 },
@@ -224,7 +248,7 @@ class MainGameScene extends Phaser.Scene {
     this.ui.add(this.doorPrompt);
     this.shopPrompt = this.add
       .text(400, 240, "", {
-        fontSize: "18px",
+        font: "18px Arial",
         fill: "#fff",
         backgroundColor: "#333",
         padding: { x: 5, y: 2 },
@@ -488,13 +512,14 @@ class MainGameScene extends Phaser.Scene {
   }
 
   loadRoom(x, y) {
-    // Clear previous
+    // clear old
     this.enemies.clear(true, true);
     this.enemyProj.clear(true, true);
     this.innerWalls.clear(true, true);
     this.walls.clear(true, true);
     this.doors.clear(true, true);
     this.projectiles.clear(true, true);
+    this.pickups.clear(true, true);
     this.inTransition = false;
 
     this.currentRoom = { x, y };
@@ -502,13 +527,15 @@ class MainGameScene extends Phaser.Scene {
     this.roomMap[key].visited = true;
     this.visitedRooms[key] = true;
 
-    // Layout
-    this.createRoomLayout(this.roomMap[key].variation);
-    ["up", "down", "left", "right"].forEach((dir) =>
-      this.createWallSegments(dir, !!this.roomMap[key].doors[dir])
-    );
+    // layout
+    if (this.roomMap[key].type !== "shop") {
+      this.createRoomLayout(this.roomMap[key].variation);
+      ["up", "down", "left", "right"].forEach((d) =>
+        this.createWallSegments(d, !!this.roomMap[key].doors[d])
+      );
+    }
 
-    // Room type
+    // room type
     switch (this.roomMap[key].type) {
       case "shop":
         this.createShopRoom();
@@ -521,15 +548,76 @@ class MainGameScene extends Phaser.Scene {
         break;
     }
 
-    // Doors & colliders
     this.createDoors(this.roomMap[key]);
     this.setupColliders();
     this.roomActive = this.enemies.countActive() > 0;
-
-    // Update minimap
     this.updateMinimap();
   }
 
+  createShopRoom() {
+    const w = this.currentWorld;
+    if (!this.shopPurchases[w])
+      this.shopPurchases[w] = { heal: false, damage: false };
+    this.shopIcons = [];
+    const cx = 400,
+      y = 300,
+      sp = 100;
+    // heal
+    if (!this.shopPurchases[w].heal) {
+      const h = this.add
+        .image(cx - sp / 2, y, "heart_full")
+        .setInteractive()
+        .setScale(1.5);
+      this.tweens.add({
+        targets: h,
+        scale: 1.8,
+        yoyo: true,
+        repeat: -1,
+        duration: 500,
+      });
+      const buyHeal = () => {
+        if (this.coins >= 10) {
+          this.coins -= 10;
+          this.coinsText.setText(`Coins: ${this.coins}`);
+          this.player.maxHealth += 2;
+          this.player.health = Math.min(
+            this.player.maxHealth,
+            this.player.health + 2
+          );
+          this.updateHearts();
+          this.shopPurchases[w].heal = true;
+          h.destroy();
+        }
+      };
+      h.on("pointerdown", buyHeal);
+      this.shopIcons.push({ sprite: h, type: "heal", purchase: buyHeal });
+    }
+    // damage
+    if (!this.shopPurchases[w].damage) {
+      const d = this.add
+        .image(cx + sp / 2, y, "projectile")
+        .setInteractive()
+        .setScale(1.5);
+      this.tweens.add({
+        targets: d,
+        scale: 1.8,
+        yoyo: true,
+        repeat: -1,
+        duration: 500,
+      });
+      const buyD = () => {
+        if (this.coins >= 20) {
+          this.coins -= 20;
+          this.coinsText.setText(`Coins: ${this.coins}`);
+          this.damageMultiplier += 0.5;
+          this.shopPurchases[w].damage = true;
+          d.destroy();
+        }
+      };
+      d.on("pointerdown", buyD);
+      this.shopIcons.push({ sprite: d, type: "damage", purchase: buyD });
+    }
+  }
   createRoomLayout(v) {
     const wkey = `wall${this.currentWorld}`;
     if (v === 0)
@@ -653,6 +741,7 @@ class MainGameScene extends Phaser.Scene {
     this.physics.add.collider(this.player, this.innerWalls);
     this.physics.add.collider(this.enemies, this.walls);
     this.physics.add.collider(this.enemies, this.innerWalls);
+    // projectiles
     this.physics.add.collider(this.projectiles, this.walls, (p) => p.destroy());
     this.physics.add.collider(this.projectiles, this.innerWalls, (p) =>
       p.destroy()
@@ -661,15 +750,12 @@ class MainGameScene extends Phaser.Scene {
     this.physics.add.collider(this.enemyProj, this.innerWalls, (p) =>
       p.destroy()
     );
-
-    // closed doors block
+    // doors
     this.doors.children.iterate((door) => {
-      if (!door.isOpen) {
+      if (!door.isOpen)
         door.collider = this.physics.add.collider(this.player, door);
-      }
     });
-
-    // open doors trigger overlap transition
+    // open doors overlap
     this.doors.children.iterate((door) => {
       if (door.isOpen) {
         this.physics.add.overlap(this.player, door, () => {
@@ -724,65 +810,6 @@ class MainGameScene extends Phaser.Scene {
     boss.health = 100 * this.currentWorld;
     boss.setScale(1.5);
     this.enemies.add(boss);
-  }
-
-  createShopRoom() {
-    // only in shop rooms: two icons
-    const world = this.currentWorld;
-    if (!this.shopPurchases[world])
-      this.shopPurchases[world] = { heal: false, damage: false };
-    const y = 300;
-    // Heal icon
-    if (!this.shopPurchases[world].heal) {
-      const h = this.add
-        .image(300, y, "heart_full")
-        .setInteractive()
-        .setScale(1.5);
-      this.tweens.add({
-        targets: h,
-        scale: 1.8,
-        yoyo: true,
-        repeat: -1,
-        duration: 500,
-      });
-      h.on("pointerdown", () => {
-        if (this.coins >= 10) {
-          this.coins -= 10;
-          this.coinsText.setText(`Coins: ${this.coins}`);
-          this.player.maxHealth += 2;
-          this.player.health = Math.min(
-            this.player.maxHealth,
-            this.player.health + 2
-          );
-          this.updateHearts();
-          this.shopPurchases[world].heal = true;
-          h.destroy();
-        }
-      });
-    }
-    // Damage icon
-    if (!this.shopPurchases[world].damage) {
-      const d = this.add
-        .image(400, y, "projectile")
-        .setInteractive()
-        .setScale(1.5);
-      this.tweens.add({
-        targets: d,
-        scale: 1.8,
-        yoyo: true,
-        repeat: -1,
-        duration: 500,
-      });
-      d.on("pointerdown", () => {
-        if (this.coins >= 20) {
-          this.coins -= 20;
-          this.coinsText.setText(`Coins: ${this.coins}`);
-          this.damageMultiplier += 0.5;
-          this.shopPurchases[world].damage = true;
-          d.destroy();
-        }
-      });
-    }
   }
 
   createEnemy(type, x, y) {
