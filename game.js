@@ -58,6 +58,8 @@ class TitleScene extends Phaser.Scene {
       this.coins = 0;
       this.damageMultiplier = 1;
       this.playerSpeed = 160;
+      this.dodgeSpeed = 400; // Speed boost during dodge
+      this.dodgeDuration = 300; // Duration of dodge in milliseconds
       this.upgrades = {
         hp: 0,
         damage: 0,
@@ -137,6 +139,7 @@ class TitleScene extends Phaser.Scene {
       this.player.lastDamageTime = 0;
       this.shootCooldown = 200;
       this.lastShootTime = 0;
+      this.isDodging = false;
   
       // Input - keep keyboard for desktop
       this.keys = this.input.keyboard.addKeys(
@@ -287,72 +290,143 @@ class TitleScene extends Phaser.Scene {
     }
     
     performDodge() {
+      if (this.isDodging || this.dodgeCount <= 0) return;
+      
+      this.isDodging = true;
       this.dodgeCount--;
       this.invincible = true;
       this.player.setTint(0x99ff99); // Green tint for dodge
+      
+      // Track which dodge was used
       const dodgeIndex = this.upgrades.dodge - this.dodgeCount - 1;
       this.dodgeCooldowns[dodgeIndex] = this.time.now + 4000; // 4 second cooldown
-      this.time.delayedCall(300, () => {
+      
+      // Determine dodge direction based on keys pressed
+      let dx = 0, dy = 0;
+      
+      if (this.isMobile) {
+        // For mobile, use the current movement direction
+        if (this.isTouching) {
+          const centerX = this.cameras.main.width / 4;
+          const centerY = this.cameras.main.height / 2;
+          dx = this.touchPosition.x - centerX;
+          dy = this.touchPosition.y - centerY;
+          
+          // Normalize
+          const length = Math.sqrt(dx * dx + dy * dy);
+          if (length > 0) {
+            dx /= length;
+            dy /= length;
+          } else {
+            // Default to up if no direction
+            dy = -1;
+          }
+        } else {
+          // Default to up if not touching
+          dy = -1;
+        }
+      } else {
+        // For desktop, use WASD keys
+        if (this.keys.W.isDown) dy = -1;
+        else if (this.keys.S.isDown) dy = 1;
+        
+        if (this.keys.A.isDown) dx = -1;
+        else if (this.keys.D.isDown) dx = 1;
+        
+        // Default to up if no direction keys are pressed
+        if (dx === 0 && dy === 0) {
+          dy = -1;
+        }
+        
+        // Normalize diagonal movement
+        if (dx !== 0 && dy !== 0) {
+          const length = Math.sqrt(dx * dx + dy * dy);
+          dx /= length;
+          dy /= length;
+        }
+      }
+      
+      // Apply dodge movement
+      this.player.setVelocity(dx * this.dodgeSpeed, dy * this.dodgeSpeed);
+      
+      // Reset after dodge duration
+      this.time.delayedCall(this.dodgeDuration, () => {
+        if (this.player.active) {
+          this.isDodging = false;
+          // Reset velocity only if still dodging (not using direct controls)
+          if (!this.keys.W.isDown && !this.keys.A.isDown && 
+              !this.keys.S.isDown && !this.keys.D.isDown && !this.isTouching) {
+            this.player.setVelocity(0, 0);
+          }
+        }
+      });
+      
+      // End invincibility
+      this.time.delayedCall(this.dodgeDuration, () => {
         this.invincible = false;
-        this.player.clearTint();
+        if (this.player.active) {
+          this.player.clearTint();
+        }
       });
     }
   
     update(time) {
-      // Movement - Handle differently for mobile vs desktop
-      this.player.setVelocity(0);
-      
-      if (this.isMobile) {
-        if (this.isTouching) {
-          // Update touch indicator position
-          this.touchIndicator.setVisible(true);
-          this.touchStick.setVisible(true);
-          this.touchIndicator.setPosition(this.touchPosition.x, this.touchPosition.y);
-          
-          // Calculate distance from initial touch to current position
-          const centerX = this.cameras.main.width / 4; // Center of left half
-          const centerY = this.cameras.main.height / 2;
-          const maxDistance = 80; // Max joystick range
-          
-          const dx = this.touchPosition.x - centerX;
-          const dy = this.touchPosition.y - centerY;
-          const distance = Math.sqrt(dx * dx + dy * dy);
-          
-          if (distance > 5) { // Small threshold to avoid tiny movements
-            // Normalize and scale velocity based on distance
-            const scale = Math.min(distance / maxDistance, 1);
-            const normX = dx / distance;
-            const normY = dy / distance;
+      // Movement - Handle differently for mobile vs desktop, but not during a dodge
+      if (!this.isDodging) {
+        this.player.setVelocity(0, 0);
+        
+        if (this.isMobile) {
+          if (this.isTouching) {
+            // Update touch indicator position
+            this.touchIndicator.setVisible(true);
+            this.touchStick.setVisible(true);
+            this.touchIndicator.setPosition(this.touchPosition.x, this.touchPosition.y);
             
-            // Move player
-            this.player.setVelocity(
-              normX * this.playerSpeed * scale,
-              normY * this.playerSpeed * scale
-            );
+            // Calculate distance from initial touch to current position
+            const centerX = this.cameras.main.width / 4; // Center of left half
+            const centerY = this.cameras.main.height / 2;
+            const maxDistance = 80; // Max joystick range
             
-            // Position the joystick indicator
-            const stickX = centerX + normX * Math.min(distance, maxDistance);
-            const stickY = centerY + normY * Math.min(distance, maxDistance);
-            this.touchStick.setPosition(stickX, stickY);
+            const dx = this.touchPosition.x - centerX;
+            const dy = this.touchPosition.y - centerY;
+            const distance = Math.sqrt(dx * dx + dy * dy);
+            
+            if (distance > 5) { // Small threshold to avoid tiny movements
+              // Normalize and scale velocity based on distance
+              const scale = Math.min(distance / maxDistance, 1);
+              const normX = dx / distance;
+              const normY = dy / distance;
+              
+              // Move player
+              this.player.setVelocity(
+                normX * this.playerSpeed * scale,
+                normY * this.playerSpeed * scale
+              );
+              
+              // Position the joystick indicator
+              const stickX = centerX + normX * Math.min(distance, maxDistance);
+              const stickY = centerY + normY * Math.min(distance, maxDistance);
+              this.touchStick.setPosition(stickX, stickY);
+            } else {
+              this.touchStick.setPosition(this.touchIndicator.x, this.touchIndicator.y);
+            }
           } else {
-            this.touchStick.setPosition(this.touchIndicator.x, this.touchIndicator.y);
+            this.touchIndicator.setVisible(false);
+            this.touchStick.setVisible(false);
           }
         } else {
-          this.touchIndicator.setVisible(false);
-          this.touchStick.setVisible(false);
+          // Desktop WASD movement
+          if (this.keys.A.isDown) this.player.setVelocityX(-this.playerSpeed);
+          if (this.keys.D.isDown) this.player.setVelocityX(this.playerSpeed);
+          if (this.keys.W.isDown) this.player.setVelocityY(-this.playerSpeed);
+          if (this.keys.S.isDown) this.player.setVelocityY(this.playerSpeed);
         }
-      } else {
-        // Desktop WASD movement
-        if (this.keys.A.isDown) this.player.setVelocityX(-this.playerSpeed);
-        if (this.keys.D.isDown) this.player.setVelocityX(this.playerSpeed);
-        if (this.keys.W.isDown) this.player.setVelocityY(-this.playerSpeed);
-        if (this.keys.S.isDown) this.player.setVelocityY(this.playerSpeed);
       }
   
       // Dodge for desktop
       if (!this.isMobile && 
           Phaser.Input.Keyboard.JustDown(this.keys.SPACE) &&
-          this.dodgeCount > 0) {
+          this.dodgeCount > 0 && !this.isDodging) {
         this.performDodge();
       }
       

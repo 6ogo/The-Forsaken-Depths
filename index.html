@@ -21,15 +21,21 @@
         display: flex;
         flex-direction: column;
         justify-content: center;
+        align-items: center;
       }
       
       #game-container {
         display: flex;
         justify-content: center;
         align-items: center;
-        flex: 1;
         position: relative;
         overflow: hidden;
+      }
+      
+      /* This ensures the canvas is centered */
+      canvas {
+        display: block;
+        margin: 0 auto;
       }
       
       #header {
