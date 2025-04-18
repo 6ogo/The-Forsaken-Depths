@@ -1,5 +1,3 @@
-// game.js
-
 // Title Scene (Welcome Screen)
 class TitleScene extends Phaser.Scene {
     constructor() { super({ key: 'TitleScene' }); }
@@ -30,18 +28,11 @@ class TitleScene extends Phaser.Scene {
       this.coins = 0;
       this.damageMultiplier = 1;
       this.playerSpeed = 160;
-      this.upgrades = {
-        hp: 0,
-        damage: 0,
-        speed: 0,
-        doubleShot: 0,
-        splitShot: 0
-      };
-      this.shopPurchases = {}; // track shop buys per world
+      this.upgrades = { hp: 0, damage: 0, speed: 0, doubleShot: 0, splitShot: 0 };
+      this.shopPurchases = {};
     }
   
     preload() {
-      // Load assets
       const assets = [
         'player','projectile','blob','boss',
         'wall','door','door_closed',
@@ -55,11 +46,8 @@ class TitleScene extends Phaser.Scene {
     }
   
     create() {
-      // Define play area
       this.playArea = { x1: 60, y1: 60, x2: 740, y2: 540 };
       this.inTransition = false;
-  
-      // Groups
       this.walls = this.physics.add.staticGroup();
       this.innerWalls = this.physics.add.staticGroup();
       this.doors = this.physics.add.staticGroup();
@@ -67,54 +55,36 @@ class TitleScene extends Phaser.Scene {
       this.enemyProj = this.physics.add.group();
       this.projectiles = this.physics.add.group();
       this.pickups = this.physics.add.group();
-  
-      // UI and minimap
       this.createUI();
       this.minimap = this.add.graphics().setScrollFactor(0).setDepth(101);
-  
-      // Player setup
       this.player = this.physics.add.sprite(400, 300, 'player').setDepth(10);
       this.player.health = 6;
       this.player.maxHealth = 6;
       this.player.lastDamageTime = 0;
       this.shootCooldown = 200;
       this.lastShootTime = 0;
-  
-      // Input
       this.keys = this.input.keyboard.addKeys('W,A,S,D,LEFT,RIGHT,UP,DOWN,E');
-  
-      // Collisions and overlaps
       this.physics.add.overlap(this.projectiles, this.enemies, this.onHitEnemy, null, this);
       this.physics.add.collider(this.player, this.enemies, () => this.takeDamage(), null, this);
       this.physics.add.overlap(this.player, this.enemyProj, () => this.takeDamage(), null, this);
       this.physics.add.overlap(this.player, this.pickups, this.onPickup, null, this);
       this.input.on('pointerdown', ptr => this.shootMouse(ptr));
-  
-      // Generate world map and load initial room
       this.generateWorldMap();
       this.loadRoom(0, 0);
     }
   
     update(time) {
-      // Player movement
       this.player.setVelocity(0);
       if (this.keys.A.isDown) this.player.setVelocityX(-this.playerSpeed);
       if (this.keys.D.isDown) this.player.setVelocityX(this.playerSpeed);
       if (this.keys.W.isDown) this.player.setVelocityY(-this.playerSpeed);
       if (this.keys.S.isDown) this.player.setVelocityY(this.playerSpeed);
-  
-      // Enemy AI and shooting delay
       this.enemies.children.iterate(e => { if (e.active) this.updateEnemy(e, time); });
-  
-      // Clear room and open doors
       if (this.roomActive && this.enemies.countActive() === 0) {
         this.roomActive = false;
-        // mark as cleared to avoid respawn
         this.clearedRooms.add(`${this.currentRoom.x},${this.currentRoom.y}`);
         this.openAllDoors();
       }
-  
-      // Door prompt and transitions
       if (!this.inTransition) {
         let nearDoor = false;
         this.doors.children.iterate(door => {
@@ -123,15 +93,33 @@ class TitleScene extends Phaser.Scene {
         });
         if (!nearDoor) this.doorPrompt.setVisible(false);
       }
-  
-      // Keyboard shooting
+      const shopKey = `${this.currentRoom.x},${this.currentRoom.y}`;
+      if (this.roomMap[shopKey].type === 'shop' && this.shopIcons) {
+        let nearShop = false;
+        this.shopIcons.forEach(icon => {
+          const d = Phaser.Math.Distance.Between(this.player.x, this.player.y, icon.sprite.x, icon.sprite.y);
+          if (d < 40) {
+            nearShop = true;
+            const txt = icon.type === 'heal'
+              ? 'Press E to heal (10 coins)'
+              : 'Press E to increase damage (20 coins)';
+            this.shopPrompt.setText(txt).setPosition(icon.sprite.x, icon.sprite.y - 50).setVisible(true);
+            if (Phaser.Input.Keyboard.JustDown(this.keys.E)) {
+              icon.purchase();
+              this.shopPrompt.setVisible(false);
+            }
+          }
+        });
+        if (!nearShop) this.shopPrompt.setVisible(false);
+      } else {
+        this.shopPrompt.setVisible(false);
+      }
       if      (this.keys.LEFT.isDown)  this.shootDir('left');
       else if (this.keys.RIGHT.isDown) this.shootDir('right');
       else if (this.keys.UP.isDown)    this.shootDir('up');
       else if (this.keys.DOWN.isDown)  this.shootDir('down');
     }
   
-    // --- UI & Minimap ---
     createUI() {
       this.ui = this.add.container(0, 0).setDepth(100);
       this.hearts = [];
@@ -143,11 +131,12 @@ class TitleScene extends Phaser.Scene {
       this.coinsText = this.add.text(100, 140, 'Coins: 0', { fontSize: '28px', fill: '#fff' });
       this.worldText = this.add.text(100, 180, 'World: 1', { fontSize: '24px', fill: '#fff' });
       this.ui.add([this.coinsText, this.worldText]);
-  
-      this.doorPrompt = this.add.text(400, 200, '', {
-        fontSize: '18px', fill: '#fff', backgroundColor: '#333', padding: { x:5, y:2 }
-      }).setOrigin(0.5).setDepth(101).setVisible(false);
+      this.doorPrompt = this.add.text(400, 200, '', { fontSize: '18px', fill: '#fff', backgroundColor: '#333', padding: { x:5, y:2 } })
+        .setOrigin(0.5).setDepth(101).setVisible(false);
       this.ui.add(this.doorPrompt);
+      this.shopPrompt = this.add.text(400, 240, '', { fontSize: '18px', fill: '#fff', backgroundColor: '#333', padding: { x:5, y:2 } })
+        .setOrigin(0.5).setDepth(101).setVisible(false);
+      this.ui.add(this.shopPrompt);
     }
   
     updateMinimap() {
@@ -156,22 +145,17 @@ class TitleScene extends Phaser.Scene {
       const coords = keys.map(k => k.split(',').map(Number));
       const xs = coords.map(c=>c[0]), ys = coords.map(c=>c[1]);
       const minX = Math.min(...xs), minY = Math.min(...ys);
-      const cell = 8, pad = 2;
-      const originX = 700, originY = 50;
-  
+      const cell = 8, pad = 2; const originX = 700, originY = 50;
       keys.forEach(k => {
         const [rx, ry] = k.split(',').map(Number);
         const px = originX + (rx - minX)*(cell+pad);
         const py = originY + (ry - minY)*(cell+pad);
-        this.minimap.lineStyle(1, 0xffffff);
-        this.minimap.strokeRect(px, py, cell, cell);
+        this.minimap.lineStyle(1, 0xffffff); this.minimap.strokeRect(px, py, cell, cell);
         if (this.visitedRooms[k]) {
-          this.minimap.fillStyle(0xffffff,1);
-          this.minimap.fillRect(px, py, cell, cell);
+          this.minimap.fillStyle(0xffffff,1); this.minimap.fillRect(px, py, cell, cell);
         }
         if (rx === this.currentRoom.x && ry === this.currentRoom.y) {
-          this.minimap.lineStyle(2,0xff0000);
-          this.minimap.strokeRect(px-1, py-1, cell+2, cell+2);
+          this.minimap.lineStyle(2,0xff0000); this.minimap.strokeRect(px-1, py-1, cell+2, cell+2);
         }
       });
     }
