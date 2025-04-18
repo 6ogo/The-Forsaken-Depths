@@ -1,3 +1,5 @@
+// game.js
+
 // Title Scene (Welcome Screen)
 class TitleScene extends Phaser.Scene {
   constructor() {

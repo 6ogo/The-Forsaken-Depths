@@ -1,40 +1,91 @@
 <!-- index.html -->
 <!DOCTYPE html>
 <html lang="en">
-<head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-  <title>The Forsaken Depths</title>
-  <script src="https://cdn.jsdelivr.net/npm/phaser@3.55.2/dist/phaser.min.js"></script>
-  <script src="game.js"></script>
-  <style>
-    body { background-color: #1a0d00; color: #ffffff; font-family: 'Press Start 2P', cursive; text-align: center; margin: 0; padding: 20px; }
-    #game-info { margin-bottom: 20px; }
-    h1 { font-size: 36px; text-shadow: 3px 3px #000; }
-    h2 { font-size: 24px; color: #0f0; }
-    p  { font-size: 16px; line-height: 1.5; }
-    ul { list-style: none; padding: 0; }
-    li { font-size: 14px; margin: 5px 0; }
-    #game-container { display:flex; justify-content:center; align-items:center; }
-  </style>
-  <link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap" rel="stylesheet"/>
-</head>
-<body>
-  <div id="game-info">
-    <h1>The Forsaken Depths</h1>
-    <p>Yo, brave adventurer! Ready to plunge into a pixelated pit of peril?</p>
-    <p>Warning: these depths don't mess around—death's got your name on speed dial.</p>
-    <h2>Features:</h2>
-    <ul>
-      <li>Pixel art so retro, you'll smell the arcade carpet.</li>
-      <li>Randomly generated dungeons every run.</li>
-      <li>Tough-as-nails combat with varied enemies.</li>
-      <li>Shops with healing and damage upgrades.</li>
-      <li>Boss fights to conquer each world.</li>
-    </ul>
-    <h2>Controls:</h2>
-    <p>WASD to move, Arrow Keys or Mouse to shoot. Press E to open doors once rooms are clear.</p>
-  </div>
-  <div id="game-container"></div>
-</body>
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>The Forsaken Depths</title>
+    <script src="https://cdn.jsdelivr.net/npm/phaser@3.55.2/dist/phaser.min.js"></script>
+    <script src="game.js"></script>
+    <style>
+      body {
+        background-color: #1a0d00;
+        color: #ffffff;
+        font-family: "Press Start 2P", cursive;
+        text-align: center;
+        margin: 0;
+        padding: 20px;
+      }
+      #game-info {
+        margin-bottom: 20px;
+      }
+      h1 {
+        font-size: 36px;
+        text-shadow: 3px 3px #000;
+      }
+      h2 {
+        font-size: 24px;
+        color: #0f0;
+      }
+      p {
+        font-size: 16px;
+        line-height: 1.5;
+      }
+      ul {
+        list-style: none;
+        padding: 0;
+      }
+      li {
+        font-size: 14px;
+        margin: 5px 0;
+      }
+      #game-container {
+        display: flex;
+        justify-content: center;
+        align-items: center;
+      }
+    </style>
+    <link
+      href="https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap"
+      rel="stylesheet"
+    />
+  </head>
+  <body>
+    <div id="game-info">
+      <h1>The Forsaken Depths</h1>
+      <p>
+        Yo, brave adventurer! Ready to plunge into a pixelated pit of peril?
+      </p>
+      <p>
+        Warning: these depths don't mess around—death's got your name on speed
+        dial.
+      </p>
+      <h2>Controls:</h2>
+      <p>
+        WASD to move, Arrow Keys or Mouse to shoot. Press E to open doors once
+        rooms are clear.
+      </p>
+    </div>
+    <div id="game-container"></div>
+    <div id="game-info">
+      <h2>Features:</h2>
+      <ul>
+        <li>Pixel art so retro, you'll smell the arcade carpet.</li>
+        <li>Randomly generated dungeons every run.</li>
+        <li>Tough-as-nails combat with varied enemies.</li>
+        <li>Shops with healing and damage upgrades.</li>
+        <li>Boss fights to conquer each world.</li>
+      </ul>
+      <h2>Game Mechanics:</h2>
+      <p>
+        Explore the dungeon, defeat enemies, and collect loot. Use your skills
+        wisely to survive.
+      </p>
+      <h2>Game Over:</h2>
+      <p>
+        When you die, it's game over, but don't worry! You can always start a
+        new adventure.
+      </p>
+    </div>
+  </body>
 </html>
