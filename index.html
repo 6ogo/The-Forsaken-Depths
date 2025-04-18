@@ -18,112 +18,126 @@
         overflow: hidden;
         height: 100vh;
         width: 100vw;
+        display: flex;
+        flex-direction: column;
+        justify-content: center;
       }
       
       #game-container {
         display: flex;
         justify-content: center;
         align-items: center;
-        height: 100vh;
-        width: 100vw;
+        flex: 1;
         position: relative;
         overflow: hidden;
       }
       
-      /* For desktop, show game instructions */
-      #game-info {
-        margin: 0 auto;
-        padding: 20px;
-        max-width: 800px;
+      #header {
+        position: absolute;
+        top: 0;
+        left: 0;
+        right: 0;
+        padding: 10px 0;
+        background-color: rgba(0, 0, 0, 0.7);
+        z-index: 10;
       }
       
       h1 {
-        font-size: 36px;
-        text-shadow: 3px 3px #000;
-        margin-top: 10px;
+        font-size: 24px;
+        margin: 0;
+        padding: 0;
+        text-shadow: 2px 2px #000;
+      }
+      
+      .controls {
+        font-size: 10px;
+        margin: 5px 0 0 0;
+      }
+      
+      /* Footer info toggle */
+      #info-toggle {
+        position: absolute;
+        bottom: 10px;
+        right: 10px;
+        background: rgba(0, 0, 0, 0.7);
+        color: #0f0;
+        border: 1px solid #0f0;
+        padding: 5px 10px;
+        cursor: pointer;
+        z-index: 20;
+        font-size: 12px;
+      }
+      
+      #game-info {
+        position: absolute;
+        bottom: 0;
+        left: 0;
+        right: 0;
+        background: rgba(0, 0, 0, 0.8);
+        padding: 10px;
+        max-height: 150px;
+        overflow-y: auto;
+        display: none;
+        z-index: 15;
       }
       
       h2 {
-        font-size: 24px;
+        font-size: 14px;
         color: #0f0;
+        margin: 5px 0;
       }
       
-      p {
-        font-size: 16px;
-        line-height: 1.5;
+      p, li {
+        font-size: 10px;
+        line-height: 1.3;
+        margin: 5px 0;
       }
       
       ul {
         list-style: none;
         padding: 0;
-      }
-      
-      li {
-        font-size: 14px;
-        margin: 5px 0;
+        margin: 0;
       }
       
       /* Mobile styles */
-      @media (max-width: 768px) {
-        body {
-          padding: 0;
-        }
-        
-        #game-info {
-          display: none; /* Hide instructions on mobile */
-        }
-        
-        #game-container {
-          position: fixed;
-          top: 0;
-          left: 0;
-          right: 0;
-          bottom: 0;
-        }
-        
-        /* Add mobile touch control instructions */
-        #mobile-controls-info {
-          display: block;
-          position: fixed;
-          bottom: 10px;
-          left: 0;
-          right: 0;
-          background-color: rgba(0, 0, 0, 0.7);
-          color: white;
-          padding: 10px;
-          font-size: 12px;
-          z-index: 1000;
-        }
+      #mobile-controls-info {
+        position: fixed;
+        bottom: 0;
+        left: 0;
+        right: 0;
+        background-color: rgba(0, 0, 0, 0.7);
+        color: white;
+        padding: 8px;
+        font-size: 10px;
+        z-index: 1000;
+        display: none;
       }
       
-      /* Desktop - show instructions */
-      @media (min-width: 769px) {
+      @media (max-width: 768px) {
         #mobile-controls-info {
+          display: block;
+        }
+        
+        #info-toggle {
           display: none;
         }
       }
     </style>
-    <link
-      href="https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap"
-      rel="stylesheet"
-    />
+    <link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap" rel="stylesheet" />
   </head>
   <body>
-    <div id="game-info">
+    <div id="header">
       <h1>The Forsaken Depths</h1>
-      <p>
-        WASD to move, Arrow Keys or Mouse to shoot. Press E to open doors once
-        rooms are clear. Press SPACE to dodge!
-      </p>
+      <div class="controls">
+        WASD to move, Arrow Keys or Mouse to shoot. Press E to open doors. Press SPACE to dodge!
+      </div>
     </div>
     
     <div id="game-container"></div>
     
-    <div id="mobile-controls-info">
-      Left side: Move • Right side: Dodge • Game auto-shoots at enemies • Tap door prompts & items to interact
-    </div>
+    <button id="info-toggle">Game Info</button>
     
-    <div id="game-info" class="desktop-only">
+    <div id="game-info">
       <h2>Features:</h2>
       <ul>
         <li>Pixel art so retro, you'll smell the arcade carpet.</li>
@@ -138,14 +152,23 @@
         Explore the dungeon, defeat enemies, and collect loot. Use your skills
         wisely to survive. Dodge enemy charge attacks!
       </p>
-      <h2>Game Over:</h2>
-      <p>
-        When you die, it's game over, but don't worry! You can always start a
-        new adventure.
-      </p>
+    </div>
+    
+    <div id="mobile-controls-info">
+      Left side: Move • Right side: Dodge • Game auto-shoots at enemies • Tap door prompts & items to interact
     </div>
     
     <script>
+      // Toggle game info
+      document.getElementById('info-toggle').addEventListener('click', function() {
+        const info = document.getElementById('game-info');
+        if (info.style.display === 'block') {
+          info.style.display = 'none';
+        } else {
+          info.style.display = 'block';
+        }
+      });
+      
       // Attempt to go fullscreen when the page loads
       document.addEventListener('click', function() {
         if (document.documentElement.requestFullscreen) {
@@ -160,7 +183,7 @@
         e.preventDefault();
       }, { passive: false });
       
-      // Hide the mobile controls info after 10 seconds
+      // Hide the mobile controls info after 8 seconds
       setTimeout(function() {
         const mobileInfo = document.getElementById('mobile-controls-info');
         if (mobileInfo) {
@@ -168,7 +191,7 @@
           mobileInfo.style.transition = 'opacity 1s';
           setTimeout(() => mobileInfo.style.display = 'none', 1000);
         }
-      }, 10000);
+      }, 8000);
     </script>
   </body>
 </html>
