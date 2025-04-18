@@ -72,9 +72,17 @@ class TitleScene extends Phaser.Scene {
       this.invincible = false;
       this.dodgeCount = 2; // Start with 2 dodges available
       this.dodgeCooldowns = [null, null]; // Track cooldowns for each dodge
+      this.lastDodgeUsed = 0; // Track which dodge was used last (1 = rightmost, 0 = leftmost)
       this.isMobile = false;
       this.autoShootTimer = 0;
       this.powerupIcons = {}; // To store powerup icons in the UI
+      
+      // Enemy types per world
+      this.worldEnemies = {
+        1: ["blob", "bee"],
+        2: ["quasit", "orc"],
+        3: ["wizard", "shapeshifter"]
+      };
     }
   
     preload() {
@@ -94,6 +102,12 @@ class TitleScene extends Phaser.Scene {
         "heart_half",
         "heart_empty",
         "background",
+        // Add new enemy types
+        "shapeshifter",
+        "wizard",
+        "quasit",
+        "orc",
+        "bee"
       ];
       assets.forEach((key) => this.load.image(key, `assets/${key}.png`));
       this.load.image("wall1", "assets/wall1.png");
@@ -297,9 +311,9 @@ class TitleScene extends Phaser.Scene {
       this.invincible = true;
       this.player.setTint(0x99ff99); // Green tint for dodge
       
-      // Track which dodge was used
-      const dodgeIndex = this.upgrades.dodge - this.dodgeCount - 1;
-      this.dodgeCooldowns[dodgeIndex] = this.time.now + 4000; // 4 second cooldown
+      // Track which dodge was used - we'll use the rightmost dodge first
+      this.lastDodgeUsed = (this.upgrades.dodge - this.dodgeCount) - 1;
+      this.dodgeCooldowns[this.lastDodgeUsed] = this.time.now + 4000; // 4 second cooldown
       
       // Determine dodge direction based on keys pressed
       let dx = 0, dy = 0;
@@ -542,16 +556,30 @@ class TitleScene extends Phaser.Scene {
         .setDepth(101)
         .setVisible(false);
       this.ui.add([this.doorPrompt, this.shopPrompt]);
+      
+      // Level transition countdown timer (invisible initially)
+      this.nextLevelText = this.add
+        .text(400, 250, "", {
+          font: "32px Arial",
+          fill: "#00ff00",
+          backgroundColor: "#000",
+          padding: { x: 10, y: 5 },
+        })
+        .setOrigin(0.5)
+        .setDepth(200)
+        .setVisible(false);
+      this.ui.add(this.nextLevelText);
     }
     
     createPowerupIcons() {
-      this.powerupsText = this.add.text(550, 60, "Powerups:", {
+      // Moved to bottom left
+      this.powerupsText = this.add.text(100, 500, "Powerups:", {
         font: "20px Arial",
         fill: "#fff"
       }).setDepth(101);
       this.ui.add(this.powerupsText);
       
-      this.powerupContainer = this.add.container(550, 95).setDepth(101);
+      this.powerupContainer = this.add.container(100, 535).setDepth(101);
       this.ui.add(this.powerupContainer);
     }
     
@@ -607,31 +635,37 @@ class TitleScene extends Phaser.Scene {
         xOffset += gap;
       }
       
-      // New row if needed
-      if (xOffset > 200) {
-        this.powerupContainer.setPosition(550, 95);
+      // Wrap to new rows if needed
+      if (xOffset > 300) {
+        // Create multiple rows of icons if needed
+        this.powerupContainer.iterate((icon, index) => {
+          const row = Math.floor(index / 8);
+          const col = index % 8;
+          icon.setPosition(col * gap, row * gap);
+        });
       }
     }
   
     drawDodgeUI(time) {
-      const startX = 220,
-        startY = 140,
+      // Moved above powerups
+      const startX = 100,
+        startY = 460,
         radius = 12,
         gap = 30;
       this.minimap.clear();
       
       // Draw dodge indicator text
       if (!this.dodgeText) {
-        this.dodgeText = this.add.text(startX - 90, startY - 5, "Dodges:", {
+        this.dodgeText = this.add.text(startX, startY - 5, "Dodges:", {
           font: "16px Arial",
           fill: "#fff"
         }).setDepth(101);
         this.ui.add(this.dodgeText);
       }
       
-      // Draw dodge indicators
+      // Draw dodge indicators - from right to left
       for (let i = 0; i < this.upgrades.dodge; i++) {
-        const px = startX + i * gap,
+        const px = startX + (i + 1) * gap,
           py = startY;
         
         // Background circle
@@ -639,8 +673,9 @@ class TitleScene extends Phaser.Scene {
         this.minimap.strokeCircle(px, py, radius);
         
         // Fill based on cooldown state
-        if (this.dodgeCooldowns[i]) {
-          const remain = Math.max(0, this.dodgeCooldowns[i] - time);
+        const reverseIdx = this.upgrades.dodge - i - 1; // Reverse index (rightmost is 0)
+        if (this.dodgeCooldowns[reverseIdx]) {
+          const remain = Math.max(0, this.dodgeCooldowns[reverseIdx] - time);
           const pct = remain / 4000;
           this.minimap.fillStyle(0xaaaaaa, 0.7);
           this.minimap.slice(
@@ -652,7 +687,7 @@ class TitleScene extends Phaser.Scene {
             false
           );
           this.minimap.fillPath();
-        } else if (i < this.dodgeCount) {
+        } else if (reverseIdx < this.dodgeCount) {
           this.minimap.fillStyle(0x00ff00, 1);
           this.minimap.fillCircle(px, py, radius - 2);
         }
@@ -900,54 +935,174 @@ class TitleScene extends Phaser.Scene {
       const dy = this.player.y - enemy.y;
       const dist = Math.hypot(dx, dy) || 1;
       
-      // For bosses, prepare charge attack instead of projectiles sometimes
-      if (enemy.type === "boss" && Math.random() < 0.01 && dist < 300) {
-        enemy.isPreparingCharge = true;
-        enemy.chargeStartTime = time;
-        enemy.chargeDuration = 1000; // 1 second preparation
-        enemy.setTint(0xffff00); // Yellow warning color
-        enemy.setVelocity(0, 0); // Stop while preparing
-        
-        // Show warning
-        const warningText = this.add.text(enemy.x, enemy.y - 40, "!!!", {
-          font: "24px Arial",
-          fill: "#ff0000",
-          stroke: "#000000",
-          strokeThickness: 4
-        }).setOrigin(0.5).setDepth(50);
-        
-        // Pulsate the enemy
-        this.tweens.add({
-          targets: enemy,
-          scale: 1.8,
-          yoyo: true,
-          repeat: 2,
-          duration: 300,
-          onComplete: () => {
-            if (warningText) warningText.destroy();
+      // Different behavior based on enemy type
+      switch (enemy.type) {
+        case "boss":
+          // Boss behavior - mix of charge and projectiles
+          if (Math.random() < 0.01 && dist < 300) {
+            this.prepareCharge(enemy, time, 1000, 0xffff00);
+          } else {
+            // Regular movement and shooting
+            enemy.setVelocity((dx / dist) * enemy.speed, (dy / dist) * enemy.speed);
+            if (time > enemy.lastShootTime + enemy.shootCooldown) {
+              this.shootEnemyProjectile(enemy);
+              enemy.lastShootTime = time;
+            }
           }
-        });
+          break;
+          
+        case "wizard":
+          // Wizard - only ranged attacks, no charging
+          // Keep distance from player
+          if (dist < 150) {
+            // Move away from player
+            enemy.setVelocity((-dx / dist) * enemy.speed, (-dy / dist) * enemy.speed);
+          } else if (dist > 250) {
+            // Move closer
+            enemy.setVelocity((dx / dist) * enemy.speed * 0.5, (dy / dist) * enemy.speed * 0.5);
+          } else {
+            // Stop and shoot if in ideal range
+            enemy.setVelocity(0, 0);
+          }
+          
+          // Shoot more frequently
+          if (time > enemy.lastShootTime + (enemy.shootCooldown * 0.7)) {
+            this.shootEnemyProjectile(enemy);
+            enemy.lastShootTime = time;
+          }
+          break;
+          
+        case "shapeshifter":
+          // Shapeshifter - random behavior patterns
+          if (!enemy.behaviorPattern || time > enemy.lastBehaviorChange + 5000) {
+            // Randomly choose a new behavior every 5 seconds
+            enemy.behaviorPattern = Phaser.Math.Between(0, 2);
+            enemy.lastBehaviorChange = time;
+          }
+          
+          switch (enemy.behaviorPattern) {
+            case 0: // Aggressive charging
+              if (Math.random() < 0.02 && dist < 250) {
+                this.prepareCharge(enemy, time, 600, 0xff0000);
+              } else {
+                enemy.setVelocity((dx / dist) * enemy.speed * 1.2, (dy / dist) * enemy.speed * 1.2);
+              }
+              break;
+            case 1: // Ranged attacks
+              if (dist < 200) {
+                // Keep distance
+                enemy.setVelocity((-dx / dist) * enemy.speed * 0.8, (-dy / dist) * enemy.speed * 0.8);
+              } else {
+                enemy.setVelocity(0, 0);
+              }
+              if (time > enemy.lastShootTime + enemy.shootCooldown) {
+                this.shootEnemyProjectile(enemy);
+                enemy.lastShootTime = time;
+              }
+              break;
+            case 2: // Erratic movement
+              const angle = Math.sin(time * 0.005) * Math.PI;
+              const newDx = Math.cos(angle) * dx - Math.sin(angle) * dy;
+              const newDy = Math.sin(angle) * dx + Math.cos(angle) * dy;
+              const newDist = Math.hypot(newDx, newDy) || 1;
+              enemy.setVelocity((newDx / newDist) * enemy.speed, (newDy / newDist) * enemy.speed);
+              if (time > enemy.lastShootTime + enemy.shootCooldown * 2) {
+                this.shootEnemyProjectile(enemy);
+                enemy.lastShootTime = time;
+              }
+              break;
+          }
+          break;
         
-        return;
+        case "orc":
+          // Orc - only does charge attacks, no ranged
+          if (Math.random() < 0.015 && dist < 220) {
+            this.prepareCharge(enemy, time, 900, 0xff6600);
+          } else {
+            // Slower approach
+            enemy.setVelocity((dx / dist) * enemy.speed * 0.8, (dy / dist) * enemy.speed * 0.8);
+          }
+          break;
+        
+        case "quasit":
+          // Quasit - mix of behaviors
+          if (Math.random() < 0.01 && dist < 180) {
+            this.prepareCharge(enemy, time, 500, 0x00ff00);
+          } else {
+            // Fast circling movement
+            const circleRadius = 150;
+            const angle = time * 0.001;
+            const targetX = this.player.x + Math.cos(angle) * circleRadius;
+            const targetY = this.player.y + Math.sin(angle) * circleRadius;
+            const circleDx = targetX - enemy.x;
+            const circleDy = targetY - enemy.y;
+            const circleDist = Math.hypot(circleDx, circleDy) || 1;
+            enemy.setVelocity((circleDx / circleDist) * enemy.speed * 1.2, (circleDy / circleDist) * enemy.speed * 1.2);
+            
+            if (time > enemy.lastShootTime + enemy.shootCooldown) {
+              this.shootEnemyProjectile(enemy);
+              enemy.lastShootTime = time;
+            }
+          }
+          break;
+        
+        case "bee":
+          // Bee - fast charging attacks only
+          if (Math.random() < 0.02 && dist < 250) {
+            this.prepareCharge(enemy, time, 400, 0xffff00);
+          } else {
+            // Erratic fast movement
+            const offsetX = Math.sin(time * 0.01) * 50;
+            const offsetY = Math.cos(time * 0.01) * 50;
+            const targetX = this.player.x + offsetX;
+            const targetY = this.player.y + offsetY;
+            const beeDx = targetX - enemy.x;
+            const beeDy = targetY - enemy.y;
+            const beeDist = Math.hypot(beeDx, beeDy) || 1;
+            enemy.setVelocity((beeDx / beeDist) * enemy.speed * 1.3, (beeDy / beeDist) * enemy.speed * 1.3);
+          }
+          break;
+          
+        default: // Default blob behavior
+          if (Math.random() < 0.005 && dist < 200) {
+            this.prepareCharge(enemy, time, 800, 0xffaa00);
+          } else {
+            enemy.setVelocity((dx / dist) * enemy.speed, (dy / dist) * enemy.speed);
+            if (time > enemy.lastShootTime + enemy.shootCooldown) {
+              this.shootEnemyProjectile(enemy);
+              enemy.lastShootTime = time;
+            }
+          }
+          break;
       }
+    }
+    
+    prepareCharge(enemy, time, duration, color) {
+      enemy.isPreparingCharge = true;
+      enemy.chargeStartTime = time;
+      enemy.chargeDuration = duration;
+      enemy.setTint(color);
+      enemy.setVelocity(0, 0); // Stop while preparing
       
-      // Normal enemies occasionally do charge attacks
-      if (enemy.type === "blob" && Math.random() < 0.005 && dist < 200) {
-        enemy.isPreparingCharge = true;
-        enemy.chargeStartTime = time;
-        enemy.chargeDuration = 800; // 0.8 seconds preparation
-        enemy.setTint(0xffaa00); // Orange warning color
-        return;
-      }
+      // Show warning
+      const warningText = this.add.text(enemy.x, enemy.y - 40, "!!!", {
+        font: "24px Arial",
+        fill: "#ff0000",
+        stroke: "#000000",
+        strokeThickness: 4
+      }).setOrigin(0.5).setDepth(50);
       
-      // Regular movement
-      enemy.setVelocity((dx / dist) * enemy.speed, (dy / dist) * enemy.speed);
-      
-      // Regular shooting
-      if (time > enemy.lastShootTime + enemy.shootCooldown) {
-        this.shootEnemyProjectile(enemy);
-        enemy.lastShootTime = time;
-      }
+      // Pulsate the enemy
+      this.tweens.add({
+        targets: enemy,
+        scale: enemy.type === "boss" ? 1.8 : 1.5,
+        yoyo: true,
+        repeat: 2,
+        duration: duration / 3,
+        onComplete: () => {
+          if (warningText) warningText.destroy();
+        }
+      });
     }
     
     processChargingState(enemy, time) {
@@ -1368,6 +1523,10 @@ class TitleScene extends Phaser.Scene {
   
     createNormalRoom() {
       const count = Phaser.Math.Between(2, 4 + this.currentWorld);
+      
+      // Get enemy types for this world
+      const enemyTypes = this.worldEnemies[this.currentWorld] || ["blob"];
+      
       for (let i = 0; i < count; i++) {
         const x = Phaser.Math.Between(
           this.playArea.x1 + 50,
@@ -1377,7 +1536,10 @@ class TitleScene extends Phaser.Scene {
           this.playArea.y1 + 50,
           this.playArea.y2 - 50
         );
-        this.enemies.add(this.createEnemy("blob", x, y));
+        
+        // Randomly select enemy type for this world
+        const enemyType = Phaser.Utils.Array.GetRandom(enemyTypes);
+        this.enemies.add(this.createEnemy(enemyType, x, y));
       }
     }
   
@@ -1391,11 +1553,49 @@ class TitleScene extends Phaser.Scene {
     createEnemy(type, x, y) {
       const e = this.physics.add.sprite(x, y, type);
       e.type = type;
-      e.speed = type === "boss" ? 80 : 50;
-      e.shootCooldown = type === "boss" ? 1000 : 2000;
+      
+      // Set enemy properties based on type
+      switch (type) {
+        case "boss":
+          e.speed = 80;
+          e.shootCooldown = 1000;
+          e.health = 50 * this.currentWorld;
+          break;
+        case "wizard":
+          e.speed = 60;
+          e.shootCooldown = 800; // Faster shooting
+          e.health = 15 * this.currentWorld;
+          break;
+        case "shapeshifter":
+          e.speed = 90;
+          e.shootCooldown = 1500;
+          e.health = 30 * this.currentWorld;
+          e.lastBehaviorChange = 0;
+          break;
+        case "orc":
+          e.speed = 70;
+          e.shootCooldown = 3000; // No shooting, but keeping for consistency
+          e.health = 35 * this.currentWorld;
+          break;
+        case "quasit":
+          e.speed = 100;
+          e.shootCooldown = 1200;
+          e.health = 18 * this.currentWorld;
+          break;
+        case "bee":
+          e.speed = 120; // Fast
+          e.shootCooldown = 3000; // No shooting, but keeping for consistency
+          e.health = 12 * this.currentWorld;
+          break;
+        default: // blob
+          e.speed = 50;
+          e.shootCooldown = 2000;
+          e.health = 20 * this.currentWorld;
+          break;
+      }
+  
       e.lastShootTime = this.time.now;
       e.setCollideWorldBounds(true);
-      e.health = (type === "boss" ? 50 : 20) * this.currentWorld;
       
       // Initialize charging properties
       e.isPreparingCharge = false;
@@ -1405,47 +1605,115 @@ class TitleScene extends Phaser.Scene {
     }
   
     shootEnemyProjectile(enemy) {
+      // Different projectile behavior based on enemy type
       const tex = enemy.type === "boss" ? "boss_projectile" : "blob_projectile";
-      if (enemy.type === "boss" && this.currentWorld >= 2) {
-        const angles = [
-          0,
-          Math.PI / 4,
-          Math.PI / 2,
-          (3 * Math.PI) / 4,
-          Math.PI,
-          (5 * Math.PI) / 4,
-          (3 * Math.PI) / 2,
-          (7 * Math.PI) / 4,
-        ];
-        const count = this.currentWorld === 2 ? 4 : 8;
-        for (let i = 0; i < count; i++) {
+      
+      switch (enemy.type) {
+        case "boss":
+          if (this.currentWorld >= 2) {
+            const angles = [
+              0,
+              Math.PI / 4,
+              Math.PI / 2,
+              (3 * Math.PI) / 4,
+              Math.PI,
+              (5 * Math.PI) / 4,
+              (3 * Math.PI) / 2,
+              (7 * Math.PI) / 4,
+            ];
+            const count = this.currentWorld === 2 ? 4 : 8;
+            for (let i = 0; i < count; i++) {
+              const p = this.enemyProj.create(enemy.x, enemy.y, tex);
+              p.setVelocity(Math.cos(angles[i]) * 200, Math.sin(angles[i]) * 200);
+            }
+          } else {
+            const p = this.enemyProj.create(enemy.x, enemy.y, tex);
+            this.physics.moveToObject(p, this.player, 200);
+          }
+          break;
+          
+        case "wizard":
+          // Wizard shoots 3 projectiles in a spread
+          const wizardAngles = [-0.2, 0, 0.2];
+          const baseAngle = Phaser.Math.Angle.Between(
+            enemy.x, enemy.y, this.player.x, this.player.y
+          );
+          
+          for (let i = 0; i < 3; i++) {
+            const angle = baseAngle + wizardAngles[i];
+            const p = this.enemyProj.create(enemy.x, enemy.y, tex);
+            p.setVelocity(
+              Math.cos(angle) * 220,
+              Math.sin(angle) * 220
+            );
+          }
+          break;
+        
+        case "shapeshifter":
+          // Random projectile pattern
+          const pattern = Phaser.Math.Between(0, 2);
+          
+          if (pattern === 0) {
+            // Single fast projectile
+            const p = this.enemyProj.create(enemy.x, enemy.y, tex);
+            this.physics.moveToObject(p, this.player, 300);
+          } 
+          else if (pattern === 1) {
+            // Spiral of 4 projectiles
+            for (let i = 0; i < 4; i++) {
+              const angle = (i / 4) * Math.PI * 2;
+              const p = this.enemyProj.create(enemy.x, enemy.y, tex);
+              p.setVelocity(
+                Math.cos(angle) * 150,
+                Math.sin(angle) * 150
+              );
+            }
+          }
+          else {
+            // 2 aimed projectiles
+            for (let i = 0; i < 2; i++) {
+              const p = this.enemyProj.create(enemy.x, enemy.y, tex);
+              this.physics.moveToObject(p, this.player, 180 + i * 40);
+            }
+          }
+          break;
+          
+        case "quasit":
+          // Fast single projectile
           const p = this.enemyProj.create(enemy.x, enemy.y, tex);
-          p.setVelocity(Math.cos(angles[i]) * 200, Math.sin(angles[i]) * 200);
-        }
-      } else {
-        const p = this.enemyProj.create(enemy.x, enemy.y, tex);
-        this.physics.moveToObject(p, this.player, 200);
+          this.physics.moveToObject(p, this.player, 240);
+          break;
+          
+        default:
+          // Default projectile behavior
+          const proj = this.enemyProj.create(enemy.x, enemy.y, tex);
+          this.physics.moveToObject(proj, this.player, 200);
+          break;
       }
     }
   
     onBossDefeated() {
       this.clearedRooms.add(`${this.currentRoom.x},${this.currentRoom.y}`);
+      
       if (this.currentWorld < this.maxWorlds) {
         this.currentWorld++;
         this.worldText.setText(`World: ${this.currentWorld}`);
-        this.generateWorldMap();
-        const msg = this.add
-          .text(400, 300, `Entering World ${this.currentWorld}!`, {
-            font: "32px Arial",
-            fill: "#ffffff",
-            backgroundColor: "#000000",
-          })
-          .setOrigin(0.5)
-          .setDepth(200);
-        this.time.delayedCall(2000, () => {
-          msg.destroy();
-          this.loadRoom(0, 0);
-        });
+        
+        // Start the 5-second countdown
+        this.nextLevelText.setText(`Going to next level in 5...`).setVisible(true);
+        
+        // Create countdown
+        for (let i = 4; i >= 0; i--) {
+          this.time.delayedCall((5-i) * 1000, () => {
+            if (i === 0) {
+              this.nextLevelText.setVisible(false);
+              this.generateWorldMap();
+              this.loadRoom(0, 0);
+            } else {
+              this.nextLevelText.setText(`Going to next level in ${i}...`);
+            }
+          });
+        }
       } else {
         const victory = this.add
           .text(400, 300, "Victory! You have conquered The Forsaken Depths!", {
