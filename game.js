@@ -1,3 +1,5 @@
+// game.js
+
 // Title Scene (Welcome Screen)
 class TitleScene extends Phaser.Scene {
     constructor() { super({ key: 'TitleScene' }); }
@@ -35,6 +37,7 @@ class TitleScene extends Phaser.Scene {
         doubleShot: 0,
         splitShot: 0
       };
+      this.shopPurchases = {}; // track shop buys per world
     }
   
     preload() {
@@ -106,6 +109,8 @@ class TitleScene extends Phaser.Scene {
       // Clear room and open doors
       if (this.roomActive && this.enemies.countActive() === 0) {
         this.roomActive = false;
+        // mark as cleared to avoid respawn
+        this.clearedRooms.add(`${this.currentRoom.x},${this.currentRoom.y}`);
         this.openAllDoors();
       }
   
@@ -497,33 +502,41 @@ class TitleScene extends Phaser.Scene {
     }
   
     createShopRoom() {
-      const key = `world${this.currentWorld}`;
-      if (!this.purchasedHealing.has(key)) {
-        const btn = this.add.text(300, 300, 'Buy Healing (10)', { font: '16px Arial', fill: '#00ff00' }).setInteractive();
-        btn.on('pointerdown', () => {
-          if (this.coins >= 10) {
-            this.coins -= 10;
-            this.player.health = Math.min(this.player.maxHealth, this.player.health + 2);
-            this.updateHearts();
-            this.coinsText.setText(`Coins: ${this.coins}`);
-            this.purchasedHealing.add(key);
-            btn.destroy();
-          }
-        });
+        // only in shop rooms: two icons
+        const world = this.currentWorld;
+        if (!this.shopPurchases[world]) this.shopPurchases[world] = { heal: false, damage: false };
+        const y = 300;
+        // Heal icon
+        if (!this.shopPurchases[world].heal) {
+          const h = this.add.image(300, y, 'heart_full').setInteractive().setScale(1.5);
+          this.tweens.add({ targets: h, scale: 1.8, yoyo: true, repeat: -1, duration: 500 });
+          h.on('pointerdown', () => {
+            if (this.coins >= 10) {
+              this.coins -= 10;
+              this.coinsText.setText(`Coins: ${this.coins}`);
+              this.player.maxHealth += 2;
+              this.player.health = Math.min(this.player.maxHealth, this.player.health + 2);
+              this.updateHearts();
+              this.shopPurchases[world].heal = true;
+              h.destroy();
+            }
+          });
+        }
+        // Damage icon
+        if (!this.shopPurchases[world].damage) {
+          const d = this.add.image(400, y, 'projectile').setInteractive().setScale(1.5);
+          this.tweens.add({ targets: d, scale: 1.8, yoyo: true, repeat: -1, duration: 500 });
+          d.on('pointerdown', () => {
+            if (this.coins >= 20) {
+              this.coins -= 20;
+              this.coinsText.setText(`Coins: ${this.coins}`);
+              this.damageMultiplier += 0.5;
+              this.shopPurchases[world].damage = true;
+              d.destroy();
+            }
+          });
+        }
       }
-      if (!this.purchasedDamage.has(key)) {
-        const btn = this.add.text(300, 350, 'Buy Damage (20)', { font: '16px Arial', fill: '#ff0000' }).setInteractive();
-        btn.on('pointerdown', () => {
-          if (this.coins >= 20) {
-            this.coins -= 20;
-            this.damageMultiplier += 0.5;
-            this.coinsText.setText(`Coins: ${this.coins}`);
-            this.purchasedDamage.add(key);
-            btn.destroy();
-          }
-        });
-      }
-    }
   
     createEnemy(type, x, y) {
       const e = this.physics.add.sprite(x, y, type);
