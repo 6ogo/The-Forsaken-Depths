@@ -3,7 +3,7 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
     <title>The Forsaken Depths</title>
     <script src="https://cdn.jsdelivr.net/npm/phaser@3.55.2/dist/phaser.min.js"></script>
     <script src="game.js"></script>
@@ -14,35 +14,93 @@
         font-family: "Press Start 2P", cursive;
         text-align: center;
         margin: 0;
-        padding: 20px;
-      }
-      #game-info {
-        margin-bottom: 20px;
-      }
-      h1 {
-        font-size: 36px;
-        text-shadow: 3px 3px #000;
-      }
-      h2 {
-        font-size: 24px;
-        color: #0f0;
-      }
-      p {
-        font-size: 16px;
-        line-height: 1.5;
-      }
-      ul {
-        list-style: none;
         padding: 0;
+        overflow: hidden;
+        height: 100vh;
+        width: 100vw;
       }
-      li {
-        font-size: 14px;
-        margin: 5px 0;
-      }
+      
       #game-container {
         display: flex;
         justify-content: center;
         align-items: center;
+        height: 100vh;
+        width: 100vw;
+        position: relative;
+        overflow: hidden;
+      }
+      
+      /* For desktop, show game instructions */
+      #game-info {
+        margin: 0 auto;
+        padding: 20px;
+        max-width: 800px;
+      }
+      
+      h1 {
+        font-size: 36px;
+        text-shadow: 3px 3px #000;
+        margin-top: 10px;
+      }
+      
+      h2 {
+        font-size: 24px;
+        color: #0f0;
+      }
+      
+      p {
+        font-size: 16px;
+        line-height: 1.5;
+      }
+      
+      ul {
+        list-style: none;
+        padding: 0;
+      }
+      
+      li {
+        font-size: 14px;
+        margin: 5px 0;
+      }
+      
+      /* Mobile styles */
+      @media (max-width: 768px) {
+        body {
+          padding: 0;
+        }
+        
+        #game-info {
+          display: none; /* Hide instructions on mobile */
+        }
+        
+        #game-container {
+          position: fixed;
+          top: 0;
+          left: 0;
+          right: 0;
+          bottom: 0;
+        }
+        
+        /* Add mobile touch control instructions */
+        #mobile-controls-info {
+          display: block;
+          position: fixed;
+          bottom: 10px;
+          left: 0;
+          right: 0;
+          background-color: rgba(0, 0, 0, 0.7);
+          color: white;
+          padding: 10px;
+          font-size: 12px;
+          z-index: 1000;
+        }
+      }
+      
+      /* Desktop - show instructions */
+      @media (min-width: 769px) {
+        #mobile-controls-info {
+          display: none;
+        }
       }
     </style>
     <link
@@ -63,23 +121,30 @@
       <h2>Controls:</h2>
       <p>
         WASD to move, Arrow Keys or Mouse to shoot. Press E to open doors once
-        rooms are clear.
+        rooms are clear. Press SPACE to dodge!
       </p>
     </div>
+    
     <div id="game-container"></div>
-    <div id="game-info">
+    
+    <div id="mobile-controls-info">
+      Left side: Move • Right side: Dodge • Game auto-shoots at enemies • Tap door prompts & items to interact
+    </div>
+    
+    <div id="game-info" class="desktop-only">
       <h2>Features:</h2>
       <ul>
         <li>Pixel art so retro, you'll smell the arcade carpet.</li>
         <li>Randomly generated dungeons every run.</li>
         <li>Tough-as-nails combat with varied enemies.</li>
+        <li>Enemies can charge at you - dodge to avoid them!</li>
         <li>Shops with healing and damage upgrades.</li>
         <li>Boss fights to conquer each world.</li>
       </ul>
       <h2>Game Mechanics:</h2>
       <p>
         Explore the dungeon, defeat enemies, and collect loot. Use your skills
-        wisely to survive.
+        wisely to survive. Dodge enemy charge attacks!
       </p>
       <h2>Game Over:</h2>
       <p>
@@ -87,5 +152,31 @@
         new adventure.
       </p>
     </div>
+    
+    <script>
+      // Attempt to go fullscreen when the page loads
+      document.addEventListener('click', function() {
+        if (document.documentElement.requestFullscreen) {
+          document.documentElement.requestFullscreen().catch(err => {
+            console.log('Fullscreen request failed: ', err);
+          });
+        }
+      }, { once: true });
+      
+      // Prevent scrolling on mobile
+      document.addEventListener('touchmove', function(e) {
+        e.preventDefault();
+      }, { passive: false });
+      
+      // Hide the mobile controls info after 10 seconds
+      setTimeout(function() {
+        const mobileInfo = document.getElementById('mobile-controls-info');
+        if (mobileInfo) {
+          mobileInfo.style.opacity = '0';
+          mobileInfo.style.transition = 'opacity 1s';
+          setTimeout(() => mobileInfo.style.display = 'none', 1000);
+        }
+      }, 10000);
+    </script>
   </body>
 </html>
