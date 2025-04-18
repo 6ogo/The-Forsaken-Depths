@@ -1,5 +1,3 @@
-// game.js
-
 // Title Screen (Welcome Screen)
 class TitleScene extends Phaser.Scene {
   constructor() {
@@ -288,6 +286,20 @@ class MainGameScene extends Phaser.Scene {
     });
   }
 
+  /** Shows a temporary on-screen message */
+  showTempMessage(text) {
+    const msg = this.add
+      .text(400, 300, text, {
+        font: "24px Arial",
+        fill: "#ff0000",
+        backgroundColor: "#000",
+        padding: { x: 10, y: 5 },
+      })
+      .setOrigin(0.5)
+      .setDepth(200);
+    this.time.delayedCall(4000, () => msg.destroy());
+  }
+
   // --- Shooting & Damage ---
   shootDir(dir) {
     if (this.time.now < this.lastShootTime + this.shootCooldown) return;
@@ -512,6 +524,11 @@ class MainGameScene extends Phaser.Scene {
   }
 
   loadRoom(x, y) {
+    // remove any leftover shop icons
+    if (this.shopIcons) {
+      this.shopIcons.forEach((icon) => icon.sprite.destroy());
+      this.shopIcons = null;
+    }
     // clear old
     this.enemies.clear(true, true);
     this.enemyProj.clear(true, true);
@@ -578,7 +595,9 @@ class MainGameScene extends Phaser.Scene {
       const buyHeal = () => {
         if (this.coins >= 10) {
           this.coins -= 10;
-          this.coinsText.setText(`Coins: ${this.coins}`);
+          this.coinsText.setText(
+            `Coins: ${this.coins} else { this.showTempMessage('Not enough coins...'); }`
+          );
           this.player.maxHealth += 2;
           this.player.health = Math.min(
             this.player.maxHealth,
@@ -608,7 +627,9 @@ class MainGameScene extends Phaser.Scene {
       const buyD = () => {
         if (this.coins >= 20) {
           this.coins -= 20;
-          this.coinsText.setText(`Coins: ${this.coins}`);
+          this.coinsText.setText(
+            `Coins: ${this.coins} else { this.showTempMessage('Not enough coins...'); }`
+          );
           this.damageMultiplier += 0.5;
           this.shopPurchases[w].damage = true;
           d.destroy();
@@ -767,7 +788,7 @@ class MainGameScene extends Phaser.Scene {
       }
     });
   }
-
+  
   transitionToRoom(nx, ny, from) {
     if (this.inTransition) return;
     this.inTransition = true;
