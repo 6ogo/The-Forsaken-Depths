@@ -553,7 +553,7 @@ class TitleScene extends Phaser.Scene {
   
   const config = {
     type: Phaser.AUTO,
-    width: 1200, height: 800,
+    width: 800, height: 600,
     scene: [TitleScene, MainGameScene, GameOverScene],
     physics: { default:'arcade', arcade:{ gravity:{y:0}, debug:false }},
     parent: 'game-container'
