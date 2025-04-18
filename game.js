@@ -1,5 +1,3 @@
-// game.js
-
 // Title Scene (Welcome Screen)
 class TitleScene extends Phaser.Scene {
     constructor() { super({ key: 'TitleScene' }); }
@@ -29,12 +27,18 @@ class TitleScene extends Phaser.Scene {
       this.currentRoom = { x: 0, y: 0 };
       this.coins = 0;
       this.damageMultiplier = 1;
-      this.purchasedHealing = new Set();
-      this.purchasedDamage = new Set();
+      this.playerSpeed = 160;
+      this.upgrades = {
+        hp: 0,
+        damage: 0,
+        speed: 0,
+        doubleShot: 0,
+        splitShot: 0
+      };
     }
   
     preload() {
-      // Load all assets including fixed door texture
+      // Load assets
       const assets = [
         'player','projectile','blob','boss',
         'wall','door','door_closed',
@@ -59,6 +63,7 @@ class TitleScene extends Phaser.Scene {
       this.enemies = this.physics.add.group();
       this.enemyProj = this.physics.add.group();
       this.projectiles = this.physics.add.group();
+      this.pickups = this.physics.add.group();
   
       // UI and minimap
       this.createUI();
@@ -79,6 +84,7 @@ class TitleScene extends Phaser.Scene {
       this.physics.add.overlap(this.projectiles, this.enemies, this.onHitEnemy, null, this);
       this.physics.add.collider(this.player, this.enemies, () => this.takeDamage(), null, this);
       this.physics.add.overlap(this.player, this.enemyProj, () => this.takeDamage(), null, this);
+      this.physics.add.overlap(this.player, this.pickups, this.onPickup, null, this);
       this.input.on('pointerdown', ptr => this.shootMouse(ptr));
   
       // Generate world map and load initial room
@@ -89,10 +95,10 @@ class TitleScene extends Phaser.Scene {
     update(time) {
       // Player movement
       this.player.setVelocity(0);
-      if (this.keys.A.isDown) this.player.setVelocityX(-160);
-      if (this.keys.D.isDown) this.player.setVelocityX(160);
-      if (this.keys.W.isDown) this.player.setVelocityY(-160);
-      if (this.keys.S.isDown) this.player.setVelocityY(160);
+      if (this.keys.A.isDown) this.player.setVelocityX(-this.playerSpeed);
+      if (this.keys.D.isDown) this.player.setVelocityX(this.playerSpeed);
+      if (this.keys.W.isDown) this.player.setVelocityY(-this.playerSpeed);
+      if (this.keys.S.isDown) this.player.setVelocityY(this.playerSpeed);
   
       // Enemy AI and shooting delay
       this.enemies.children.iterate(e => { if (e.active) this.updateEnemy(e, time); });
@@ -149,17 +155,17 @@ class TitleScene extends Phaser.Scene {
       const originX = 700, originY = 50;
   
       keys.forEach(k => {
-        const [rx,ry] = k.split(',').map(Number);
+        const [rx, ry] = k.split(',').map(Number);
         const px = originX + (rx - minX)*(cell+pad);
         const py = originY + (ry - minY)*(cell+pad);
         this.minimap.lineStyle(1, 0xffffff);
         this.minimap.strokeRect(px, py, cell, cell);
         if (this.visitedRooms[k]) {
-          this.minimap.fillStyle(0xffffff, 1);
+          this.minimap.fillStyle(0xffffff,1);
           this.minimap.fillRect(px, py, cell, cell);
         }
         if (rx === this.currentRoom.x && ry === this.currentRoom.y) {
-          this.minimap.lineStyle(2, 0xff0000);
+          this.minimap.lineStyle(2,0xff0000);
           this.minimap.strokeRect(px-1, py-1, cell+2, cell+2);
         }
       });
@@ -168,34 +174,77 @@ class TitleScene extends Phaser.Scene {
     // --- Shooting & Damage ---
     shootDir(dir) {
       if (this.time.now < this.lastShootTime + this.shootCooldown) return;
-      const p = this.projectiles.create(this.player.x, this.player.y, 'projectile');
-      const speed = 300;
-      if (dir === 'left')  p.setVelocityX(-speed);
-      if (dir === 'right') p.setVelocityX(speed);
-      if (dir === 'up')    p.setVelocityY(-speed);
-      if (dir === 'down')  p.setVelocityY(speed);
-      p.damage = 10 * this.damageMultiplier;
+      // handle patterns
+      const angleMap = { left: Math.PI, right: 0, up: -Math.PI/2, down: Math.PI/2 };
+      const baseAngle = angleMap[dir];
+      this.fireProjectiles(baseAngle);
       this.lastShootTime = this.time.now;
     }
   
     shootMouse(ptr) {
       if (this.time.now < this.lastShootTime + this.shootCooldown) return;
       const angle = Phaser.Math.Angle.Between(this.player.x, this.player.y, ptr.x, ptr.y);
-      const p = this.projectiles.create(this.player.x, this.player.y, 'projectile');
-      p.setVelocity(Math.cos(angle)*300, Math.sin(angle)*300);
-      p.damage = 10 * this.damageMultiplier;
+      this.fireProjectiles(angle);
       this.lastShootTime = this.time.now;
+    }
+  
+    fireProjectiles(angle) {
+      const countSplit = this.upgrades.splitShot;
+      const doubleCount = this.upgrades.doubleShot > 0 ? 2 : 1;
+      const totalShots = (countSplit + 1) * doubleCount;
+      const spread = Math.PI/12;
+      const angles = [];
+      // split angles
+      for (let i = 0; i <= countSplit; i++) {
+        const offset = ((i - countSplit/2) * spread);
+        angles.push(angle + offset);
+      }
+      // double shots
+      const finalAngles = [];
+      angles.forEach(a => {
+        for (let d = 0; d < doubleCount; d++) finalAngles.push(a);
+      });
+      finalAngles.forEach(a => {
+        const p = this.projectiles.create(this.player.x, this.player.y, 'projectile');
+        p.setVelocity(Math.cos(a)*300, Math.sin(a)*300);
+        p.damage = 10 * this.damageMultiplier;
+      });
     }
   
     onHitEnemy(proj, enemy) {
       enemy.health -= proj.damage;
       proj.destroy();
       if (enemy.health <= 0) {
-        this.coins++;
-        this.coinsText.setText(`Coins: ${this.coins}`);
-        if (enemy.type === 'boss') this.onBossDefeated();
+        if (enemy.type === 'boss') {
+          this.dropRandomUpgrade(enemy.x, enemy.y);
+          this.onBossDefeated();
+        } else {
+          this.coins++;
+          this.coinsText.setText(`Coins: ${this.coins}`);
+        }
         enemy.destroy();
       }
+    }
+  
+    dropRandomUpgrade(x, y) {
+      const types = ['hp','damage','speed','doubleShot','splitShot'];
+      const choice = Phaser.Utils.Array.GetRandom(types);
+      const keyMap = { hp: 'heart_full', damage: 'projectile', speed: 'boss_projectile', doubleShot: 'blob', splitShot: 'blob_projectile' };
+      const pickup = this.pickups.create(x, y, keyMap[choice]);
+      pickup.upgradeType = choice;
+      this.tweens.add({ targets: pickup, scale: 1.2, yoyo: true, repeat: -1, duration: 500 });
+    }
+  
+    onPickup(player, pickup) {
+      const t = pickup.upgradeType;
+      switch(t) {
+        case 'hp': this.player.maxHealth += 5; this.player.health = Math.min(this.player.maxHealth, this.player.health+2); break;
+        case 'damage': this.damageMultiplier += 0.3; break;
+        case 'speed': this.playerSpeed += 20; break;
+        case 'doubleShot': this.upgrades.doubleShot++; break;
+        case 'splitShot': this.upgrades.splitShot++; break;
+      }
+      pickup.destroy();
     }
   
     takeDamage() {
@@ -207,7 +256,7 @@ class TitleScene extends Phaser.Scene {
     }
   
     updateHearts() {
-      const full = Math.floor(this.player.health / 2);
+      const full = Math.floor(this.player.health/2);
       const half = this.player.health % 2 === 1;
       this.hearts.forEach((h,i) => {
         if (i < full) h.setTexture('heart_full');
@@ -226,7 +275,7 @@ class TitleScene extends Phaser.Scene {
         this.shootEnemyProjectile(enemy);
         enemy.lastShootTime = time;
       }
-    }
+    }  
   
     // --- Map & Rooms ---
     generateWorldMap() {
