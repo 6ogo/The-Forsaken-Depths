@@ -112,8 +112,6 @@ class GameOverScene extends Phaser.Scene {
       .setInteractive();
 
     restartBtn.on("pointerdown", () => {
-      // Restart implies starting from 0, no need for extra flag?
-      // Let's keep the flag for clarity in MainGameScene's create
       this.scene.start("MainGameScene", { restart: true });
     });
     restartBtn.on("pointerover", () => restartBtn.setStyle({ fill: "#ffffff" }));
@@ -133,9 +131,6 @@ class GameOverScene extends Phaser.Scene {
     exit.on("pointerdown", () => this.scene.start("TitleScene"));
     exit.on("pointerover", () => exit.setStyle({ fill: "#ffffff" }));
     exit.on("pointerout", () => exit.setStyle({ fill: "#00ffff" }));
-
-    // Remove the "Continue Run" button entirely
-    // const continueBtn = this.add ... (code removed)
   }
 }
 // Main Game Scene
@@ -175,25 +170,39 @@ class MainGameScene extends Phaser.Scene {
       3: ["wizard", "shapeshifter", "witch"],
       4: ["orc", "witch", "bee"],
       5: ["shapeshifter", "orc", "quasit"],
-      6: ["witch", "bee", "orc"]
+      6: ["witch", "bee", "orc", "wizard"] // Example world 6 enemies
     };
     this.roomActive = false; // Is the current room uncleared?
     this.clearedRooms = new Set(); // Stores keys of cleared rooms ("x,y")
     this.visitedRooms = {}; // Stores keys of visited rooms for minimap
     this.entryDoorDirection = null; // Direction player entered from
+    this.colliders = []; // Initialize collider array
+
+    this.finder = null; // Pathfinding instance
+    this.pathfindingGrid = null; // Grid representation for pathfinding
+    this.gridCellSize = 32; // Size of pathfinding grid cells (adjust as needed)
+    this.enemyPathData = new Map(); // Store path data per enemy { enemy.id -> { path: [], targetNodeIndex: number } }
+    this.repathTimer = 0; // Timer to recalculate paths periodically
   }
 
   preload() {
     // Load all game assets
     const assets = [
       "player", "projectile", "blob", "boss", "wall",
-      "door", "door_closed", "boss_projectile", "blob_projectile",
+      "door", "door_closed", "boss_projectile", // Keep boss_projectile for bosses
       "gold_sparkles", "heart_full", "heart_half", "heart_empty",
       "background", "shapeshifter", "wizard", "quasit", "orc",
-      "bee", "witch", "boss1", "boss2", "boss3", "boss4", "boss5"
+      "bee", "witch", "boss1", "boss2", "boss3", "boss4", "boss5",
+      "shadow" // Load shadow asset
     ];
 
     assets.forEach((key) => this.load.image(key, `assets/${key}.png`));
+
+    // Load specific projectile assets
+    this.load.image("wizard_projectile", "assets/wizard_projectile.png");
+    this.load.image("witch_projectile", "assets/witch_projectile.png");
+    this.load.image("quasit_projectile", "assets/quail_projectile.png"); // Assuming quail_ is for quasit
+    this.load.image("blob_projectile", "assets/blob_projectile.png");
 
     // Load wall variations
     for (let i = 1; i <= 5; i++) {
@@ -205,15 +214,18 @@ class MainGameScene extends Phaser.Scene {
     // Load powerup icons
     const powerupAssets = {
       dodge_icon: "boss_projectile", // Placeholder, replace with actual icons
-      damage_icon: "damage_up",
-      hp_icon: "health_up",
+      damage_icon: "damage_up", // Assuming you have these assets
+      hp_icon: "health_up",     // Assuming you have these assets
       speed_icon: "blob_projectile", // Placeholder
       doubleshot_icon: "blob", // Placeholder
       splitshot_icon: "blob_projectile" // Placeholder
     };
 
     Object.entries(powerupAssets).forEach(([key, value]) => {
-      this.load.image(key, `assets/${value}.png`);
+        // Check if asset already loaded to avoid warnings (optional)
+        if (!this.textures.exists(key)) {
+            this.load.image(key, `assets/${value}.png`);
+        }
     });
 
     // Load sounds (already loaded in TitleScene, but good practice to ensure)
@@ -247,6 +259,10 @@ class MainGameScene extends Phaser.Scene {
     this.physics.world.setBounds(0, 0, this.sys.game.config.width, this.sys.game.config.height);
     this.inTransition = false;
 
+    // Initialize Pathfinding
+    this.finder = new EasyStar.js();
+    // Grid setup happens in loadRoom after walls are placed
+
     // Create physics groups
     this.setupPhysicsGroups();
 
@@ -266,7 +282,6 @@ class MainGameScene extends Phaser.Scene {
     if (data?.restart) {
       this.resetGame(); // Use a dedicated reset function
     }
-    // Note: Continue logic removed as per request
 
     // Generate world
     this.generateWorldMap();
@@ -280,6 +295,115 @@ class MainGameScene extends Phaser.Scene {
     this.cameras.main.setZoom(1.0); // Adjust zoom if needed
     // this.cameras.main.startFollow(this.player); // Optional: Camera follows player
   }
+
+  // --- Pathfinding Helper Functions ---
+
+  setupPathfindingGrid() {
+    const gridWidth = Math.ceil(this.sys.game.config.width / this.gridCellSize);
+    const gridHeight = Math.ceil(this.sys.game.config.height / this.gridCellSize);
+
+    this.pathfindingGrid = [];
+    for (let y = 0; y < gridHeight; y++) {
+        this.pathfindingGrid[y] = [];
+        for (let x = 0; x < gridWidth; x++) {
+            this.pathfindingGrid[y][x] = 0; // 0 = Walkable
+        }
+    }
+
+    // Mark wall tiles as non-walkable (1)
+    const markWallTile = (wall) => {
+        // Calculate the grid cells this wall overlaps
+        const left = Math.max(0, Math.floor((wall.x - wall.displayWidth / 2) / this.gridCellSize));
+        const right = Math.min(gridWidth, Math.ceil((wall.x + wall.displayWidth / 2) / this.gridCellSize));
+        const top = Math.max(0, Math.floor((wall.y - wall.displayHeight / 2) / this.gridCellSize));
+        const bottom = Math.min(gridHeight, Math.ceil((wall.y + wall.displayHeight / 2) / this.gridCellSize));
+
+        for (let y = top; y < bottom; y++) {
+            for (let x = left; x < right; x++) {
+                // No need for bounds check here due to Math.max/min above
+                this.pathfindingGrid[y][x] = 1; // 1 = Non-walkable
+            }
+        }
+    };
+
+    this.walls.getChildren().forEach(markWallTile);
+    this.innerWalls.getChildren().forEach(markWallTile);
+    // Optionally mark closed doors as non-walkable too
+    this.doors.getChildren().forEach(door => {
+        if (!door.isOpen) {
+            markWallTile(door); // Treat closed doors as walls for pathfinding
+        }
+    });
+
+
+    this.finder.setGrid(this.pathfindingGrid);
+    this.finder.setAcceptableTiles([0]); // Only tile ID 0 is walkable
+    // this.finder.enableDiagonals(); // Optional: Allow diagonal movement
+    this.finder.setIterationsPerCalculation(1000); // Adjust performance if needed
+    console.log("Pathfinding grid setup complete.");
+  }
+
+  getGridCoordinates(worldX, worldY) {
+    const gridX = Math.floor(worldX / this.gridCellSize);
+    const gridY = Math.floor(worldY / this.gridCellSize);
+    return { x: gridX, y: gridY };
+  }
+
+  getWorldCoordinates(gridX, gridY) {
+    const worldX = gridX * this.gridCellSize + this.gridCellSize / 2;
+    const worldY = gridY * this.gridCellSize + this.gridCellSize / 2;
+    return { x: worldX, y: worldY };
+  }
+
+  findPathForEnemy(enemy) {
+    if (!this.finder || !enemy.active || !this.player.active || !this.pathfindingGrid) return;
+
+    const enemyGridPos = this.getGridCoordinates(enemy.x, enemy.y);
+    const playerGridPos = this.getGridCoordinates(this.player.x, this.player.y);
+
+    // Basic bounds check for grid coordinates
+    const gridHeight = this.pathfindingGrid.length;
+    const gridWidth = gridHeight > 0 ? this.pathfindingGrid[0].length : 0;
+
+    if (enemyGridPos.x < 0 || enemyGridPos.y < 0 || enemyGridPos.y >= gridHeight || enemyGridPos.x >= gridWidth ||
+        playerGridPos.x < 0 || playerGridPos.y < 0 || playerGridPos.y >= gridHeight || playerGridPos.x >= gridWidth) {
+        // console.warn("Pathfinding coordinates out of bounds.", enemyGridPos, playerGridPos);
+        this.enemyPathData.set(enemy.id, { path: null, targetNodeIndex: -1 });
+        return; // Invalid positions
+    }
+
+    // Avoid pathfinding if already at target
+    if (enemyGridPos.x === playerGridPos.x && enemyGridPos.y === playerGridPos.y) {
+         this.enemyPathData.set(enemy.id, { path: null, targetNodeIndex: -1 }); // Clear path
+         // Don't stop velocity here, let movement logic handle stopping
+         return;
+    }
+
+    // Check if the target tile is walkable
+    if (this.pathfindingGrid[playerGridPos.y][playerGridPos.x] === 1) {
+         // console.log("Target tile is unwalkable.");
+         // Maybe stop the enemy or have it wait? Or target last known player pos?
+         this.enemyPathData.set(enemy.id, { path: null, targetNodeIndex: -1 });
+         // enemy.setVelocity(0,0); // Let movement logic handle this
+         return;
+    }
+
+    // Request path calculation (asynchronous)
+    this.finder.findPath(enemyGridPos.x, enemyGridPos.y, playerGridPos.x, playerGridPos.y, (path) => {
+        if (!enemy.active) return; // Check if enemy is still active when callback fires
+
+        if (path === null || path.length <= 1) {
+            // console.warn("Path not found for enemy:", enemy.type);
+            this.enemyPathData.set(enemy.id, { path: null, targetNodeIndex: -1 });
+        } else {
+            // console.log("Path found for enemy:", enemy.type, path.length);
+            // Start moving towards the second node (index 1) as index 0 is the start node
+            this.enemyPathData.set(enemy.id, { path: path, targetNodeIndex: 1 });
+        }
+    });
+    // Calculation is processed via this.finder.calculate() in the main update loop
+  }
+
 
   setupPhysicsGroups() {
     this.walls = this.physics.add.staticGroup();
@@ -300,6 +424,8 @@ class MainGameScene extends Phaser.Scene {
     this.shootCooldown = 200; // ms between shots
     this.lastShootTime = 0;
     this.isDodging = false;
+    // Set player body size slightly smaller than sprite for smoother wall collision
+    this.player.body.setSize(this.player.width * 0.8, this.player.height * 0.8);
   }
 
   setupInputs() {
@@ -395,9 +521,11 @@ class MainGameScene extends Phaser.Scene {
   setupColliders() {
     // Clear existing colliders before adding new ones (important for room transitions)
     if (this.colliders) {
-        this.colliders.forEach(c => c.destroy());
+        this.colliders.forEach(c => {
+             if (c && c.active) c.destroy()
+        });
     }
-    this.colliders = [];
+    this.colliders = []; // Reset the array
 
     // Wall collisions
     this.colliders.push(this.physics.add.collider(this.player, this.walls));
@@ -456,19 +584,24 @@ class MainGameScene extends Phaser.Scene {
     ));
 
     // Player vs Closed Doors
-    // This collider is added dynamically when doors are created/closed
     this.doors.getChildren().forEach(door => {
         if (!door.isOpen) {
+             // Create collider and store reference on the door AND in the main array
              door.collider = this.physics.add.collider(this.player, door);
              this.colliders.push(door.collider);
         }
     });
 
     // Physics world bounds collision for projectiles
+    this.physics.world.off('worldbounds'); // Remove previous listener if any
     this.physics.world.on('worldbounds', (body) => {
         // Check if the body hitting the bounds is a projectile and destroy it
-        if (this.projectiles.contains(body.gameObject) || this.enemyProj.contains(body.gameObject)) {
+        if (body.gameObject && (this.projectiles.contains(body.gameObject) || this.enemyProj.contains(body.gameObject))) {
             body.gameObject.destroy();
+        }
+        // Also stop enemies if they hit bounds (player has setCollideWorldBounds)
+        else if (body.gameObject && this.enemies.contains(body.gameObject)) {
+             body.gameObject.setVelocity(0,0); // Stop enemy at bounds
         }
     });
   }
@@ -519,64 +652,68 @@ class MainGameScene extends Phaser.Scene {
   performDodge() {
     if (this.isDodging || this.dodgeCount <= 0) return;
 
-    // Find the next available dodge slot to put on cooldown
-    // This logic assumes cooldowns are tracked correctly elsewhere
-    // A simpler approach might be just decrementing count and starting one cooldown timer
-    // Let's use the simpler approach for now:
-    const availableSlotIndex = this.upgrades.dodge - this.dodgeCount; // Index of the dodge being used
+    const availableSlotIndex = this.upgrades.dodge - this.dodgeCount;
 
-    // Set states
     this.isDodging = true;
-    this.invincible = true; // Invincible during dodge
-    this.player.setTint(0x00ffff); // Cyan tint during dodge
+    this.invincible = true;
+    this.player.setTint(0x00ffff);
     this.dodgeCount--;
 
     this.sounds.dash.play();
 
     // Start cooldown for the used dodge slot
-    this.dodgeCooldowns[availableSlotIndex] = this.time.now + this.dodgeCooldownTime;
+    // Find the first null slot (or the next available index)
+    let cooldownIndexToSet = -1;
+    for(let i = 0; i < this.upgrades.dodge; ++i) {
+        if (this.dodgeCooldowns[i] === null) {
+            cooldownIndexToSet = i;
+            break;
+        }
+    }
+    if (cooldownIndexToSet !== -1) {
+        this.dodgeCooldowns[cooldownIndexToSet] = this.time.now + this.dodgeCooldownTime;
+    } else {
+        console.warn("Could not find empty slot for dodge cooldown, logic error?");
+        // Fallback: just push it, might lead to incorrect UI later
+        this.dodgeCooldowns.push(this.time.now + this.dodgeCooldownTime);
+    }
+
 
     // --- Determine Dodge Direction ---
     let dx = 0, dy = 0;
     let moveRequested = false;
 
     if (this.isMobile) {
-      if (this.isTouching) {
-        // Calculate direction from joystick center to touch position
-        const centerX = this.cameras.main.width / 4; // Center of left half
-        const centerY = this.cameras.main.height / 2;
+      if (this.isTouching && this.touchIndicator && this.touchIndicator.visible) { // Check if indicator is visible
+        const centerX = this.touchIndicator.x;
+        const centerY = this.touchIndicator.y;
         dx = this.touchPosition.x - centerX;
         dy = this.touchPosition.y - centerY;
         const length = Math.sqrt(dx * dx + dy * dy);
+        const deadZone = 10;
 
-        if (length > 10) { // Only dodge if stick is moved significantly
+        if (length > deadZone) {
             dx /= length;
             dy /= length;
             moveRequested = true;
         }
       }
-      // If not touching or stick is centered, default dodge direction (e.g., forward)
       if (!moveRequested) {
-        // Determine forward direction based on player sprite or last movement?
-        // For simplicity, let's default to dodging upwards if no direction is input
-        dy = -1;
+        dy = -1; // Default dodge up
       }
 
     } else { // Keyboard
       if (this.keys.W.isDown) { dy = -1; moveRequested = true; }
       else if (this.keys.S.isDown) { dy = 1; moveRequested = true; }
-
       if (this.keys.A.isDown) { dx = -1; moveRequested = true; }
       else if (this.keys.D.isDown) { dx = 1; moveRequested = true; }
 
-      // If no movement keys are pressed, default dodge direction (e.g., forward/up)
       if (!moveRequested) {
         dy = -1; // Default dodge up
       }
 
-      // Normalize diagonal movement
       if (dx !== 0 && dy !== 0) {
-        const length = Math.sqrt(dx * dx + dy * dy);
+        const length = Math.sqrt(2);
         dx /= length;
         dy /= length;
       }
@@ -588,16 +725,12 @@ class MainGameScene extends Phaser.Scene {
 
     // End dodge after duration
     this.time.delayedCall(this.dodgeDuration, () => {
-      if (this.player.active) { // Check if player still exists
+      if (this.player.active) {
         this.isDodging = false;
         this.player.clearTint();
-        // Stop movement ONLY if no movement keys are pressed AFTER the dodge ends
-        // This requires checking keys again here, or setting velocity based on current input
-        // Let's just stop velocity for simplicity, player needs to press keys again to move
-        this.player.setVelocity(0, 0);
+        this.player.setVelocity(0, 0); // Stop velocity after dodge
 
-        // Check if player was hit during dodge; if so, invincibility remains for post-hit duration
-        // Otherwise, remove invincibility
+        // Check if player was hit during dodge; if so, invincibility remains
         if (this.time.now > this.player.lastDamageTime + 800) {
              this.invincible = false;
         }
@@ -621,10 +754,6 @@ class MainGameScene extends Phaser.Scene {
       .setDepth(101)
       .setVisible(false);
 
-    // Mobile door interaction zone (invisible, covers door area)
-    // This might be better handled by checking distance in update loop
-    // Let's stick to distance check for mobile door interaction for now.
-
     // Shop prompt (text displayed when near shop items)
     this.shopPrompt = this.add
       .text(400, promptY + 40, "", { // Position below door prompt
@@ -641,43 +770,32 @@ class MainGameScene extends Phaser.Scene {
   }
 
   handleDoorInteraction(door) {
-    // Called when player is near a door
     const distance = Phaser.Math.Distance.Between(
         this.player.x, this.player.y, door.x, door.y
     );
 
-    if (distance < 60) { // Interaction radius
+    if (distance < 60) {
         if (door.isOpen) {
-            // Show prompt for desktop
             if (!this.isMobile) {
                 this.doorPrompt.setText("[E] Enter")
-                    .setPosition(door.x, door.y - 40) // Position above door
+                    .setPosition(door.x, door.y - 40)
                     .setVisible(true);
             }
-
-            // Check for interaction input (Key E or crossing threshold)
-            if ((!this.isMobile && this.keys.E.isDown) || this.isCrossingDoorThreshold(door)) {
+            if ((!this.isMobile && Phaser.Input.Keyboard.JustDown(this.keys.E)) || this.isCrossingDoorThreshold(door)) {
                  const [nx, ny] = door.targetRoom.split(",").map(Number);
                  this.transitionToRoom(nx, ny, door.direction);
-                 return true; // Interaction happened
+                 return true; // Transition started
             }
         } else if (!this.roomActive) {
-             // Room is cleared, but this door was somehow missed? Open it.
-             // This case should ideally not happen if openAllDoors works correctly.
-             this.openDoor(door);
+             this.openDoor(door); // Open if room cleared but door still closed
         }
-    } else {
-        // Hide prompt if player moved away (only hide if it was for this door)
-        if (!this.isMobile && this.doorPrompt.visible && this.doorPrompt.x === door.x) {
-             this.doorPrompt.setVisible(false);
-        }
+        return false; // Near door, but no transition
     }
-    return false; // No interaction happened
+    // Return undefined if not near this door
   }
 
   isCrossingDoorThreshold(door) {
-      // Check if player center has moved past the door's threshold
-      const threshold = 10; // How far past the door center counts as crossing
+      const threshold = 10;
       switch (door.direction) {
           case "up":    return this.player.y < door.y - threshold;
           case "down":  return this.player.y > door.y + threshold;
@@ -700,6 +818,20 @@ class MainGameScene extends Phaser.Scene {
     this.touchPosition = { x: 0, y: 0 };
     this.isTouching = false;
     this.touchId = -1; // Track the finger used for movement
+
+    // Touch indicators (visual feedback for joystick) - Create them first
+    this.touchIndicator = this.add
+      .circle(100, 450, 40, 0xffffff, 0.3) // Base circle
+      .setDepth(90)
+      .setScrollFactor(0)
+      .setVisible(false);
+
+    this.touchStick = this.add
+      .circle(100, 450, 20, 0xffffff, 0.7) // Knob circle
+      .setDepth(91)
+      .setScrollFactor(0)
+      .setVisible(false);
+
 
     // Movement controls
     this.leftHalf.on('pointerdown', (pointer) => {
@@ -770,19 +902,6 @@ class MainGameScene extends Phaser.Scene {
       callbackScope: this,
       loop: true
     });
-
-    // Touch indicators (visual feedback for joystick)
-    this.touchIndicator = this.add
-      .circle(100, 450, 40, 0xffffff, 0.3) // Base circle
-      .setDepth(90)
-      .setScrollFactor(0)
-      .setVisible(false);
-
-    this.touchStick = this.add
-      .circle(100, 450, 20, 0xffffff, 0.7) // Knob circle
-      .setDepth(91)
-      .setScrollFactor(0)
-      .setVisible(false);
   }
 
   fireProjectiles(angle) {
@@ -798,6 +917,7 @@ class MainGameScene extends Phaser.Scene {
 
             // Center projectile
             const pCenter = this.projectiles.create(this.player.x, this.player.y, "projectile");
+            if (!pCenter) return; // Pool check
             pCenter.setVelocity(Math.cos(angle) * projectileSpeed, Math.sin(angle) * projectileSpeed);
             pCenter.damage = finalDamage;
             pCenter.body.onWorldBounds = true;
@@ -807,6 +927,7 @@ class MainGameScene extends Phaser.Scene {
                 // Left side
                 const angleL = angle - i * spreadAngle;
                 const pL = this.projectiles.create(this.player.x, this.player.y, "projectile");
+                 if (!pL) continue; // Pool check
                 pL.setVelocity(Math.cos(angleL) * projectileSpeed, Math.sin(angleL) * projectileSpeed);
                 pL.damage = finalDamage;
                 pL.body.onWorldBounds = true;
@@ -815,6 +936,7 @@ class MainGameScene extends Phaser.Scene {
                 // Right side
                 const angleR = angle + i * spreadAngle;
                 const pR = this.projectiles.create(this.player.x, this.player.y, "projectile");
+                 if (!pR) continue; // Pool check
                 pR.setVelocity(Math.cos(angleR) * projectileSpeed, Math.sin(angleR) * projectileSpeed);
                 pR.damage = finalDamage;
                 pR.body.onWorldBounds = true;
@@ -836,40 +958,37 @@ class MainGameScene extends Phaser.Scene {
 
 
   onBossDefeated() {
-    // Mark room as cleared BEFORE potentially transitioning
     this.clearedRooms.add(`${this.currentRoom.x},${this.currentRoom.y}`);
-    this.roomActive = false; // Ensure room is marked inactive
+    this.roomActive = false;
 
-    // Play upgrade sound
     this.sounds.upgrade.play();
 
     if (this.currentWorld < this.maxWorlds) {
       this.currentWorld++;
       this.worldText.setText(`World: ${this.currentWorld}`);
 
-      // Start the 5-second countdown visual
       this.nextLevelText.setText(`Going to next level in 5...`).setVisible(true);
       let countdown = 5;
-      this.countdownEvent = this.time.addEvent({ // Store event to potentially cancel if needed
+      if (this.countdownEvent) this.countdownEvent.remove();
+
+      this.countdownEvent = this.time.addEvent({
           delay: 1000,
-          repeat: 4, // 5, 4, 3, 2, 1 (5 ticks total, 4 repeats)
+          repeat: 4,
           callback: () => {
               countdown--;
               this.nextLevelText.setText(`Going to next level in ${countdown}...`);
               if (countdown === 0) {
                   this.nextLevelText.setVisible(false);
-                  this.generateWorldMap(); // Generate new layout
-                  this.entryDoorDirection = null; // Reset entry direction for new world
-                  this.loadRoom(0, 0); // Load the starting room of the new world
+                  this.generateWorldMap();
+                  this.entryDoorDirection = null;
+                  this.loadRoom(0, 0);
               }
           }
       });
 
     } else {
-      // Victory Screen
       this.cameras.main.fadeOut(1000, 0, 0, 0);
       this.time.delayedCall(1000, () => {
-          // Display victory message (or transition to a dedicated Victory Scene)
            const victory = this.add
             .text(400, 300, "Victory! You have conquered The Forsaken Depths!", {
               font: "24px Arial",
@@ -881,7 +1000,7 @@ class MainGameScene extends Phaser.Scene {
             })
             .setOrigin(0.5)
             .setDepth(200)
-            .setScrollFactor(0); // Fix to camera
+            .setScrollFactor(0);
 
           this.time.delayedCall(5000, () => {
             this.scene.start("TitleScene");
@@ -891,15 +1010,13 @@ class MainGameScene extends Phaser.Scene {
   }
 
   autoShoot() {
-    // Only auto-shoot if mobile, player is active, and cooldown is ready
     if (!this.isMobile || !this.player.active || this.time.now < this.lastShootTime + this.shootCooldown) return;
 
-    // Find the closest enemy within a certain range
     let closestEnemy = null;
-    let minDistanceSq = 300 * 300; // Max auto-shoot range (squared for efficiency)
+    let minDistanceSq = 300 * 300;
 
     this.enemies.getChildren().forEach(enemy => {
-        if (!enemy.active) return; // Skip inactive enemies
+        if (!enemy.active) return;
         const distSq = Phaser.Math.Distance.Squared(this.player.x, this.player.y, enemy.x, enemy.y);
 
         if (distSq < minDistanceSq) {
@@ -908,61 +1025,43 @@ class MainGameScene extends Phaser.Scene {
         }
     });
 
-    // If an enemy is found in range, shoot at it
     if (closestEnemy) {
         const angle = Phaser.Math.Angle.Between(
             this.player.x, this.player.y, closestEnemy.x, closestEnemy.y
         );
         this.fireProjectiles(angle);
-        this.lastShootTime = this.time.now; // Reset cooldown timer
+        this.lastShootTime = this.time.now;
     }
   }
 
   createPowerupIcons() {
-    // Text label for the powerup section
     this.powerupsText = this.add.text(100, 500, "Powerups:", {
       font: "20px Arial",
       fill: "#fff"
-    }).setDepth(101).setScrollFactor(0); // Fix to camera
+    }).setDepth(101).setScrollFactor(0);
 
-    this.ui.add(this.powerupsText); // Add to UI container
+    this.ui.add(this.powerupsText);
 
-    // Container to hold the actual powerup icons
-    this.powerupContainer = this.add.container(100, 535).setDepth(101).setScrollFactor(0); // Position below text
-    this.ui.add(this.powerupContainer); // Add to UI container
+    this.powerupContainer = this.add.container(100, 535).setDepth(101).setScrollFactor(0);
+    this.ui.add(this.powerupContainer);
   }
 
   updatePowerupIcons() {
-    this.powerupContainer.removeAll(true); // Clear previous icons
+    if (!this.powerupContainer) return;
+    this.powerupContainer.removeAll(true);
 
     const iconConfigs = [
-      { // Damage
-        count: this.upgrades.damage,
-        icon: "damage_icon"
-      },
-      { // Speed
-        count: this.upgrades.speed,
-        icon: "speed_icon"
-      },
-      { // HP (show based on upgrades, not current health)
-        count: this.upgrades.hp,
-        icon: "hp_icon"
-      },
-      { // Double Shot
-        count: this.upgrades.doubleShot,
-        icon: "doubleshot_icon"
-      },
-      { // Split Shot
-        count: this.upgrades.splitShot,
-        icon: "splitshot_icon"
-      }
-      // Note: Dodge count is handled by the dedicated dodge UI
+      { count: this.upgrades.damage, icon: "damage_icon" },
+      { count: this.upgrades.speed, icon: "speed_icon" },
+      { count: this.upgrades.hp, icon: "hp_icon" },
+      { count: this.upgrades.doubleShot, icon: "doubleshot_icon" },
+      { count: this.upgrades.splitShot, icon: "splitshot_icon" }
     ];
 
     let xOffset = 0;
-    const iconSize = 32; // Assumed size of icons
-    const gap = 8; // Gap between icons
-    const maxIconsPerRow = 8; // How many icons before wrapping
+    const iconSize = 32;
+    const gap = 8;
+    const maxIconsPerRow = 8;
     let currentY = 0;
     let iconsInRow = 0;
 
@@ -974,9 +1073,9 @@ class MainGameScene extends Phaser.Scene {
               currentY += iconSize + gap;
               iconsInRow = 0;
           }
-          const icon = this.add.image(xOffset, currentY, config.icon).setOrigin(0, 0).setScale(0.8); // Scale down slightly
+          const icon = this.add.image(xOffset, currentY, config.icon).setOrigin(0, 0).setScale(0.8);
           this.powerupContainer.add(icon);
-          xOffset += (iconSize * 0.8) + gap; // Adjust offset based on scaled size
+          xOffset += (iconSize * 0.8) + gap;
           iconsInRow++;
         }
       }
@@ -985,31 +1084,22 @@ class MainGameScene extends Phaser.Scene {
 
   generateWorldMap() {
     this.roomMap = {};
-    this.visitedRooms = {}; // Reset visited status for the new world
-    this.clearedRooms = new Set(); // Reset cleared status for the new world
+    this.visitedRooms = {};
+    this.clearedRooms = new Set();
 
-    // Create start room
-    this.roomMap["0,0"] = {
-      type: "start", // Start room is always clear, no enemies
-      doors: {},
-      depth: 0,
-      variation: 0 // No variation for start room
-    };
-    this.visitedRooms["0,0"] = true; // Mark start room as visited
+    this.roomMap["0,0"] = { type: "start", doors: {}, depth: 0, variation: 0 };
+    this.visitedRooms["0,0"] = true;
 
     let currentPos = { x: 0, y: 0 };
     let pathLength = 0;
-    const minPath = 3; // Minimum rooms in main path (excluding start)
-    const maxPath = 6; // Maximum rooms in main path
+    const minPath = 3;
+    const maxPath = 6;
     let bossRoomKey = null;
 
-    // Generate main path towards the boss
     while (pathLength < maxPath) {
       const possibleDirections = Phaser.Utils.Array.Shuffle([
-        { dx: 0, dy: -1, dir: "up", opp: "down" }, // Up
-        { dx: 1, dy: 0, dir: "right", opp: "left" }, // Right
-        { dx: 0, dy: 1, dir: "down", opp: "up" }, // Down
-        { dx: -1, dy: 0, dir: "left", opp: "right" }, // Left
+        { dx: 0, dy: -1, dir: "up", opp: "down" }, { dx: 1, dy: 0, dir: "right", opp: "left" },
+        { dx: 0, dy: 1, dir: "down", opp: "up" }, { dx: -1, dy: 0, dir: "left", opp: "right" },
       ]);
 
       let moved = false;
@@ -1019,70 +1109,45 @@ class MainGameScene extends Phaser.Scene {
         const nextKey = `${nextX},${nextY}`;
         const currentKey = `${currentPos.x},${currentPos.y}`;
 
-        // Check if the next room position is already taken
         if (!this.roomMap[nextKey]) {
-          // Create the new room
-          this.roomMap[nextKey] = {
-            type: "normal", // Default to normal, will be changed later if needed
-            doors: {},
-            depth: pathLength + 1,
-            variation: Phaser.Math.Between(1, 2), // Assign a random variation (1 or 2)
-          };
-
-          // Connect doors
+          this.roomMap[nextKey] = { type: "normal", doors: {}, depth: pathLength + 1, variation: Phaser.Math.Between(1, 2) };
           this.roomMap[currentKey].doors[move.dir] = nextKey;
           this.roomMap[nextKey].doors[move.opp] = currentKey;
-
-          // Move to the new room
           currentPos = { x: nextX, y: nextY };
           pathLength++;
-          bossRoomKey = nextKey; // Potential boss room is the last one added
+          bossRoomKey = nextKey;
           moved = true;
-          break; // Exit loop after finding a valid direction
+          break;
         }
       }
-
-      // If no valid move was found from the current position, stop extending the path
-      if (!moved || pathLength >= maxPath) {
-          break;
-      }
+      if (!moved || pathLength >= maxPath) break;
     }
 
-    // Ensure minimum path length
-    if (pathLength < minPath && bossRoomKey) {
-        // This scenario is less likely with the loop structure but handle defensively
-        // Could try extending again, or just accept a shorter path
-    }
-
-    // Set the last room in the main path as the boss room
     if (bossRoomKey) {
       this.roomMap[bossRoomKey].type = "boss";
-    } else {
-        // Fallback if no path could be generated (shouldn't happen with start room)
-        // Maybe force a boss room adjacent to start?
-        this.roomMap["1,0"] = { type: "boss", doors: {"left": "0,0"}, depth: 1, variation: 0 };
-        this.roomMap["0,0"].doors["right"] = "1,0";
+    } else if (pathLength === 0) {
+        bossRoomKey = "1,0";
+        this.roomMap[bossRoomKey] = { type: "boss", doors: {"left": "0,0"}, depth: 1, variation: 0 };
+        this.roomMap["0,0"].doors["right"] = bossRoomKey;
     }
 
-
-    // Add a shop room (optional, could be guaranteed)
     const normalRoomKeys = Object.keys(this.roomMap).filter(
-      (k) => k !== "0,0" && this.roomMap[k].type === "normal"
+      (k) => k !== "0,0" && k !== bossRoomKey && this.roomMap[k].type === "normal"
     );
     if (normalRoomKeys.length > 0) {
       const shopKey = Phaser.Utils.Array.GetRandom(normalRoomKeys);
       this.roomMap[shopKey].type = "shop";
     }
 
-    // Add some side branches (optional)
     const maxBranches = 2;
     let branchesAdded = 0;
-    const potentialBranchStarts = Object.keys(this.roomMap).filter(k => k !== bossRoomKey); // Don't branch off boss
+    const potentialBranchStarts = Object.keys(this.roomMap).filter(k => k !== bossRoomKey);
 
     for (let i = 0; i < potentialBranchStarts.length && branchesAdded < maxBranches; i++) {
         const baseKey = Phaser.Utils.Array.GetRandom(potentialBranchStarts);
+        potentialBranchStarts.splice(potentialBranchStarts.indexOf(baseKey), 1);
         const baseRoom = this.roomMap[baseKey];
-        // Only add branch if the room has space for more doors (less than 3 existing)
+
         if (Object.keys(baseRoom.doors).length < 3) {
             const [baseX, baseY] = baseKey.split(",").map(Number);
             const possibleDirections = Phaser.Utils.Array.Shuffle([
@@ -1095,19 +1160,12 @@ class MainGameScene extends Phaser.Scene {
                 const nextY = baseY + move.dy;
                 const nextKey = `${nextX},${nextY}`;
 
-                // Check if room exists and if base room already has a door in this direction
                 if (!this.roomMap[nextKey] && !baseRoom.doors[move.dir]) {
-                    this.roomMap[nextKey] = {
-                        type: "normal", // Branch rooms are usually normal
-                        doors: {},
-                        depth: baseRoom.depth + 1,
-                        variation: Phaser.Math.Between(1, 2),
-                    };
-                    // Connect doors
+                    this.roomMap[nextKey] = { type: "normal", doors: {}, depth: baseRoom.depth + 1, variation: Phaser.Math.Between(1, 2) };
                     baseRoom.doors[move.dir] = nextKey;
                     this.roomMap[nextKey].doors[move.opp] = baseKey;
                     branchesAdded++;
-                    break; // Added one branch from this base room
+                    break;
                 }
             }
         }
@@ -1118,208 +1176,167 @@ class MainGameScene extends Phaser.Scene {
     // --- Cleanup previous room ---
     if (this.shopIcons) {
       this.shopIcons.forEach((iconGroup) => {
-          // Add checks here too, just in case
           if (iconGroup.sprite) iconGroup.sprite.destroy();
           if (iconGroup.text) iconGroup.text.destroy();
           if (iconGroup.desc) iconGroup.desc.destroy();
       });
       this.shopIcons = null;
     }
+    // Cleanup enemies AND their shadows before clearing group
+    this.enemies.getChildren().forEach(enemy => {
+        if (enemy.type === 'bee') {
+            const shadow = enemy.getData('shadow');
+            if (shadow) shadow.destroy();
+        }
+    });
     this.enemies.clear(true, true);
     this.enemyProj.clear(true, true);
     this.innerWalls.clear(true, true);
     this.walls.clear(true, true);
-    this.doors.clear(true, true); // Clear the doors group
+    this.doors.clear(true, true);
     this.projectiles.clear(true, true);
     this.pickups.clear(true, true);
 
-    // Clear dynamic colliders from previous room - MODIFY THIS PART
+    // Clear dynamic colliders from previous room
     if (this.colliders) {
         this.colliders.forEach(c => {
-            // *** ADD THIS CHECK ***
-            // Ensure 'c' exists and ideally check if it's still active in the physics world
-            // Using 'c.active' is a good check provided by Phaser for colliders
             if (c && c.active) {
                 c.destroy();
             }
-            // *********************
         });
         this.colliders = []; // Reset the array AFTER the loop
     } else {
         this.colliders = []; // Initialize if it doesn't exist
     }
+    // Reset pathfinding data
+    this.enemyPathData.clear();
     // Hide prompts
     this.doorPrompt.setVisible(false);
     this.shopPrompt.setVisible(false);
 
 
     // --- Setup new room ---
-    this.inTransition = false; // Mark transition as complete
+    this.inTransition = false;
     this.currentRoom = { x, y };
-    this.entryDoorDirection = entryDirection; // Store how player entered
+    this.entryDoorDirection = entryDirection;
 
     const roomKey = `${x},${y}`;
     if (!this.roomMap[roomKey]) {
-        console.error(`Room ${roomKey} not found in map!`);
-        // Fallback: Go back to start?
+        console.error(`Room ${roomKey} not found in map! Attempting recovery.`);
         this.loadRoom(0, 0);
         return;
     }
 
     const currentRoomData = this.roomMap[roomKey];
-    currentRoomData.visited = true; // Mark as visited for map generation logic (if needed)
-    this.visitedRooms[roomKey] = true; // Mark as visited for minimap display
+    currentRoomData.visited = true;
+    this.visitedRooms[roomKey] = true;
 
-    // Determine if the room should have active enemies
     const isCleared = this.clearedRooms.has(roomKey);
-    // Room is active if it's normal/boss AND not cleared
     this.roomActive = (currentRoomData.type === 'normal' || currentRoomData.type === 'boss') && !isCleared;
 
     // Create room layout (walls, background)
-    this.createRoomLayout(roomKey, currentRoomData);
+    this.createRoomLayout(roomKey, currentRoomData); // Creates walls
 
     // Spawn content based on room type and cleared status
     switch (currentRoomData.type) {
-      case "shop":
-        this.createShopRoom();
-        this.roomActive = false; // Shops are never active/locked
-        break;
-      case "boss":
-        if (!isCleared) {
-            this.createBossRoom();
-        }
-        break;
-      case "normal":
-        if (!isCleared) {
-            this.createNormalRoom();
-        }
-        break;
-      case "start":
-        this.roomActive = false; // Start room is never active
-        break;
+      case "shop": this.createShopRoom(); this.roomActive = false; break;
+      case "boss": if (!isCleared) this.createBossRoom(); break;
+      case "normal": if (!isCleared) this.createNormalRoom(); break;
+      case "start": this.roomActive = false; break;
     }
 
-    // Create doors for the current room AFTER determining if room is active
+    // Create doors AFTER determining room state
     this.createDoors(currentRoomData);
 
-    // Setup physics colliders for the new room layout and entities
-    // This will repopulate this.colliders
+    // Setup Pathfinding Grid for the new layout
+    this.setupPathfindingGrid();
+
+    // Setup physics colliders
     this.setupColliders();
 
     // Update UI elements
     this.updateMinimap();
-    this.updateHearts(); // Ensure hearts are correct after potential healing/max hp changes
+    this.updateHearts();
   }
 
+
   createRoomLayout(key, roomData) {
-    // Set background
     if (this.background) this.background.destroy();
-    // Choose background based on world?
     this.background = this.add.image(400, 300, "bg").setDepth(-10);
-    this.background.setScale(Math.max(this.sys.game.config.width / this.background.width, this.sys.game.config.height / this.background.height)); // Scale to fit/fill
+    this.background.setScale(Math.max(this.sys.game.config.width / this.background.width, this.sys.game.config.height / this.background.height));
 
     const { x1, y1, x2, y2 } = this.playArea;
-    const wallTexture = `wall${this.currentWorld}`; // Use world-specific wall texture
+    const wallTexture = `wall${this.currentWorld}`;
+    const wallThickness = 32;
 
-    // Create outer walls based on whether a door exists in that direction
-    // Top wall
-    if (!roomData.doors?.up) {
-      this.walls.create(400, y1 - 16, wallTexture).setOrigin(0.5, 0.5).setDisplaySize(x2 - x1 + 64, 32).refreshBody();
-    }
-    // Bottom wall
-    if (!roomData.doors?.down) {
-      this.walls.create(400, y2 + 16, wallTexture).setOrigin(0.5, 0.5).setDisplaySize(x2 - x1 + 64, 32).refreshBody();
-    }
-    // Left wall
-    if (!roomData.doors?.left) {
-      this.walls.create(x1 - 16, 300, wallTexture).setOrigin(0.5, 0.5).setDisplaySize(32, y2 - y1 + 64).refreshBody();
-    }
-    // Right wall
-    if (!roomData.doors?.right) {
-      this.walls.create(x2 + 16, 300, wallTexture).setOrigin(0.5, 0.5).setDisplaySize(32, y2 - y1 + 64).refreshBody();
-    }
+    // --- Create FULL outer walls ---
+    this.walls.create(400, y1 - wallThickness / 2, wallTexture).setOrigin(0.5).setDisplaySize(x2 - x1 + wallThickness * 2, wallThickness).refreshBody();
+    this.walls.create(400, y2 + wallThickness / 2, wallTexture).setOrigin(0.5).setDisplaySize(x2 - x1 + wallThickness * 2, wallThickness).refreshBody();
+    this.walls.create(x1 - wallThickness / 2, 300, wallTexture).setOrigin(0.5).setDisplaySize(wallThickness, y2 - y1 + wallThickness * 2).refreshBody();
+    this.walls.create(x2 + wallThickness / 2, 300, wallTexture).setOrigin(0.5).setDisplaySize(wallThickness, y2 - y1 + wallThickness * 2).refreshBody();
 
-    // Add inner wall variations based on roomData.variation
+    // --- Add inner wall variations ---
     const variation = roomData.variation;
-    const innerWallSize = 64; // Example size for inner blocks
+    const innerWallSize = 64;
     switch (variation) {
       case 1: // Cross pattern
-        this.innerWalls.create(400, 300, wallTexture)
-          .setOrigin(0.5)
-          .setDisplaySize(innerWallSize * 4, innerWallSize * 0.5) // Horizontal bar
-          .refreshBody();
-        this.innerWalls.create(400, 300, wallTexture)
-          .setOrigin(0.5)
-          .setDisplaySize(innerWallSize * 0.5, innerWallSize * 4) // Vertical bar
-          .refreshBody();
+        this.innerWalls.create(400, 300, wallTexture).setOrigin(0.5).setDisplaySize(innerWallSize * 4, innerWallSize * 0.5).refreshBody();
+        this.innerWalls.create(400, 300, wallTexture).setOrigin(0.5).setDisplaySize(innerWallSize * 0.5, innerWallSize * 4).refreshBody();
         break;
       case 2: // Corner blocks
-        this.innerWalls.create(x1 + innerWallSize, y1 + innerWallSize, wallTexture)
-          .setOrigin(0.5)
-          .setDisplaySize(innerWallSize, innerWallSize)
-          .refreshBody();
-        this.innerWalls.create(x2 - innerWallSize, y1 + innerWallSize, wallTexture)
-          .setOrigin(0.5)
-          .setDisplaySize(innerWallSize, innerWallSize)
-          .refreshBody();
-        this.innerWalls.create(x1 + innerWallSize, y2 - innerWallSize, wallTexture)
-          .setOrigin(0.5)
-          .setDisplaySize(innerWallSize, innerWallSize)
-          .refreshBody();
-        this.innerWalls.create(x2 - innerWallSize, y2 - innerWallSize, wallTexture)
-          .setOrigin(0.5)
-          .setDisplaySize(innerWallSize, innerWallSize)
-          .refreshBody();
+        this.innerWalls.create(x1 + innerWallSize * 1.5, y1 + innerWallSize * 1.5, wallTexture).setOrigin(0.5).setDisplaySize(innerWallSize, innerWallSize).refreshBody();
+        this.innerWalls.create(x2 - innerWallSize * 1.5, y1 + innerWallSize * 1.5, wallTexture).setOrigin(0.5).setDisplaySize(innerWallSize, innerWallSize).refreshBody();
+        this.innerWalls.create(x1 + innerWallSize * 1.5, y2 - innerWallSize * 1.5, wallTexture).setOrigin(0.5).setDisplaySize(innerWallSize, innerWallSize).refreshBody();
+        this.innerWalls.create(x2 - innerWallSize * 1.5, y2 - innerWallSize * 1.5, wallTexture).setOrigin(0.5).setDisplaySize(innerWallSize, innerWallSize).refreshBody();
         break;
-      // case 0 or default: No inner walls (start room, potentially others)
     }
   }
 
   createDoors(roomData) {
     const { x1, y1, x2, y2 } = this.playArea;
     const doorsData = roomData.doors;
+    const doorSize = 64;
+    const visualOffset = 5; // How much the door overlaps the wall visually
 
     Object.entries(doorsData).forEach(([direction, targetRoomKey]) => {
       let doorX = 400, doorY = 300;
-      let doorTexture = "door"; // Default open texture
+      let doorTexture = "door";
 
-      // Determine position based on direction
       switch (direction) {
-        case 'up':    doorY = y1; break;
-        case 'down':  doorY = y2; break;
-        case 'left':  doorX = x1; break;
-        case 'right': doorX = x2; break;
+        case 'up':    doorY = y1 + visualOffset; break;
+        case 'down':  doorY = y2 - visualOffset; break;
+        case 'left':  doorX = x1 + visualOffset; break;
+        case 'right': doorX = x2 - visualOffset; break;
       }
 
-      // Check if the door should be closed (if room is active)
       const shouldBeClosed = this.roomActive;
       if (shouldBeClosed) {
           doorTexture = "door_closed";
       }
 
-      // Create the door sprite and add it to the physics group
       const door = this.doors.create(doorX, doorY, doorTexture).setDepth(1).setImmovable(true);
+      door.body.setSize(doorSize * 0.8, doorSize * 0.8); // Smaller physics body for easier entry
+      door.setDisplaySize(doorSize, doorSize);
       door.direction = direction;
       door.targetRoom = targetRoomKey;
-      door.isOpen = !shouldBeClosed; // Set initial state
-      door.collider = null; // Placeholder for the player collider if closed
+      door.isOpen = !shouldBeClosed;
+      door.collider = null;
 
-      // If the door is closed, add a collider with the player
-      if (!door.isOpen) {
-          // Note: Collider is added in setupColliders to ensure it's managed correctly
-      }
+      // Collider added/removed in setupColliders/openDoor
     });
   }
 
   openDoor(door) {
-      if (!door.isOpen) {
+      if (door && !door.isOpen) {
           door.setTexture("door");
           door.isOpen = true;
-          // Remove the specific collider between player and this door
           if (door.collider) {
-              // Check if collider exists and is part of the physics world before removing
-              if (this.physics.world.colliders.getActive().includes(door.collider)) {
-                   door.collider.destroy(); // Use destroy() which removes it from the world
+              if (door.collider.active && this.physics.world.colliders.getActive().includes(door.collider)) {
+                   door.collider.destroy();
+              }
+              const index = this.colliders.indexOf(door.collider);
+              if (index > -1) {
+                  this.colliders.splice(index, 1);
               }
               door.collider = null;
           }
@@ -1334,420 +1351,647 @@ class MainGameScene extends Phaser.Scene {
 
 
   createNormalRoom() {
-    // Get possible enemies for the current world
-    const possibleEnemies = this.worldEnemies[this.currentWorld] || ["blob"]; // Fallback to blob
-    const enemyCount = Phaser.Math.Between(3, 5); // Number of enemies to spawn
+    const possibleEnemies = this.worldEnemies[this.currentWorld] || ["blob"];
+    const enemyCount = Phaser.Math.Between(3, 5);
 
-    // Determine entry door position to avoid spawning enemies too close
     let entryDoorPos = null;
     const { x1, y1, x2, y2 } = this.playArea;
-    const safeSpawnDistanceSq = 150 * 150; // Squared distance check
+    const safeSpawnDistanceSq = 150 * 150;
 
     if (this.entryDoorDirection) {
         switch (this.entryDoorDirection) {
-            case 'up':    entryDoorPos = { x: 400, y: y1 }; break;
-            case 'down':  entryDoorPos = { x: 400, y: y2 }; break;
-            case 'left':  entryDoorPos = { x: x1, y: 300 }; break;
-            case 'right': entryDoorPos = { x: x2, y: 300 }; break;
+            case 'up':    entryDoorPos = { x: 400, y: y1 + 30 }; break;
+            case 'down':  entryDoorPos = { x: 400, y: y2 - 30 }; break;
+            case 'left':  entryDoorPos = { x: x1 + 30, y: 300 }; break;
+            case 'right': entryDoorPos = { x: x2 - 30, y: 300 }; break;
         }
     }
 
     for (let i = 0; i < enemyCount; i++) {
       const enemyType = Phaser.Utils.Array.GetRandom(possibleEnemies);
-      let spawnX, spawnY, distSq;
+      let spawnX, spawnY, distSqFromDoor, distSqFromCenter;
       let attempts = 0;
-      const maxAttempts = 10; // Prevent infinite loop
+      const maxAttempts = 20;
 
-      // Find a valid spawn position (not too close to entry door or center)
       do {
-          // Generate random position within playable area, avoiding edges slightly
           spawnX = Phaser.Math.Between(this.playArea.x1 + 50, this.playArea.x2 - 50);
           spawnY = Phaser.Math.Between(this.playArea.y1 + 50, this.playArea.y2 - 50);
-
-          // Check distance from entry door if applicable
-          distSq = entryDoorPos ? Phaser.Math.Distance.Squared(spawnX, spawnY, entryDoorPos.x, entryDoorPos.y) : safeSpawnDistanceSq + 1;
-
+          distSqFromDoor = entryDoorPos ? Phaser.Math.Distance.Squared(spawnX, spawnY, entryDoorPos.x, entryDoorPos.y) : safeSpawnDistanceSq + 1;
+          distSqFromCenter = Phaser.Math.Distance.Squared(spawnX, spawnY, 400, 300);
           attempts++;
-      } while (distSq < safeSpawnDistanceSq && attempts < maxAttempts);
+      } while ((distSqFromDoor < safeSpawnDistanceSq || distSqFromCenter < 100*100) && attempts < maxAttempts);
 
-      // If we couldn't find a good spot after several attempts, spawn anyway
+      if (attempts >= maxAttempts) {
+          console.warn("Could not find ideal spawn position for enemy, spawning anyway.");
+      }
+
       this.createEnemy(spawnX, spawnY, enemyType);
     }
-    this.roomActive = true; // Mark room as active
+    this.roomActive = true;
   }
 
   createEnemy(x, y, type) {
     const enemy = this.enemies.create(x, y, type);
-    if (!enemy || !enemy.body) return null; // Check if creation failed
+    if (!enemy || !enemy.body) return null;
 
-    // Base stats (customize per enemy type)
     const baseStats = {
       blob: { health: 30, speed: 80, shootCooldown: 2000, damage: 1 },
-      bee: { health: 25, speed: 150, shootCooldown: 0, damage: 1 }, // No shooting, contact damage
-      witch: { health: 45, speed: 0, shootCooldown: 3500, damage: 1, teleportDelay: 500, shootDelay: 500 }, // Stationary, relies on teleport/shoot
+      bee: { health: 25, speed: 150, shootCooldown: 0, damage: 1 },
+      witch: { health: 45, speed: 0, shootCooldown: 3500, damage: 1, teleportDelay: 100, shakeDuration: 400, shootDelay: 500 },
       quasit: { health: 40, speed: 110, shootCooldown: 1800, damage: 1 },
-      orc: { health: 60, speed: 90, shootCooldown: 0, chargePrepareTime: 1000, chargeDuration: 500, chargeSpeed: 250, damage: 2 }, // Charging enemy
-      wizard: { health: 40, speed: 70, shootCooldown: 1500, damage: 1, fleeDistance: 150, engageDistance: 250 }, // Kiting enemy
-      shapeshifter: { health: 50, speed: 120, shootCooldown: 2500, damage: 1, behaviorChangeTime: 3000 }, // Changes behavior
+      orc: { health: 60, speed: 90, shootCooldown: 0, chargePrepareTime: 1000, chargeDuration: 500, chargeSpeed: 250, damage: 2 },
+      wizard: { health: 40, speed: 70, shootCooldown: 1500, damage: 1, fleeDistance: 150, engageDistance: 250 },
+      shapeshifter: { health: 50, speed: 120, shootCooldown: 2500, damage: 1, behaviorChangeTime: 3000 },
     };
 
-    const stats = baseStats[type] || baseStats.blob; // Default to blob stats if type unknown
+    const stats = baseStats[type] || baseStats.blob;
 
-    // Apply stats
     enemy.health = this.hardMode ? Math.ceil(stats.health * 1.5) : stats.health;
-    enemy.maxHealth = enemy.health; // Store max health if needed for UI/logic
+    enemy.maxHealth = enemy.health;
     enemy.speed = stats.speed;
     enemy.type = type;
     enemy.shootCooldown = stats.shootCooldown;
-    enemy.lastShootTime = this.time.now + Phaser.Math.Between(0, stats.shootCooldown / 2); // Stagger initial shots
-    enemy.damage = stats.damage; // Damage dealt (e.g., on contact or projectile)
+    enemy.lastShootTime = this.time.now + Phaser.Math.Between(500, stats.shootCooldown || 2000); // Ensure shootCooldown has a fallback
+    enemy.damage = stats.damage;
 
-    // Type-specific properties
     enemy.isPreparingCharge = false;
     enemy.isCharging = false;
     enemy.chargePrepareTime = stats.chargePrepareTime;
     enemy.chargeDuration = stats.chargeDuration;
     enemy.chargeSpeed = stats.chargeSpeed;
     enemy.lastChargeAttempt = 0;
-    enemy.chargeCooldown = 4000; // Cooldown between charge attempts for Orc
+    enemy.chargeCooldown = 4000;
 
     enemy.fleeDistance = stats.fleeDistance;
     enemy.engageDistance = stats.engageDistance;
 
     enemy.behaviorTimer = 0;
     enemy.behaviorChangeTime = stats.behaviorChangeTime;
-    enemy.currentBehavior = 'chase'; // Default behavior for shapeshifter
+    enemy.currentBehavior = 'chase';
 
-    enemy.isTeleporting = false; // For Witch
+    enemy.isTeleporting = false;
     enemy.teleportDelay = stats.teleportDelay;
-    enemy.shootDelay = stats.shootDelay; // Delay between teleport and shoot for Witch
+    enemy.shootDelay = stats.shootDelay;
+    enemy.shakeDuration = stats.shakeDuration;
 
-    // Ensure enemy collides with walls
-    enemy.setCollideWorldBounds(true); // Collide with canvas edges too
+    enemy.setCollideWorldBounds(true);
+    enemy.body.onWorldBounds = true;
+    enemy.body.setSize(enemy.width * 0.8, enemy.height * 0.8);
+    enemy.id = Phaser.Utils.String.UUID(); // Assign unique ID for path map
+
+    // --- Bee Specific Enhancements ---
+    if (type === 'bee') {
+        const shadow = this.add.sprite(x, y + 10, 'shadow').setDepth(enemy.depth - 1).setAlpha(0.4);
+        enemy.setData('shadow', shadow); // Store shadow reference
+
+        this.tweens.add({
+            targets: enemy,
+            y: y - 6, // How high it floats
+            duration: 1200, // Speed of float cycle
+            ease: 'Sine.easeInOut',
+            yoyo: true,
+            repeat: -1
+        });
+    }
+    // --- End Bee Enhancements ---
 
     return enemy;
   }
 
   updateEnemy(enemy, time, delta) {
-    if (!enemy.active || !this.player.active) return; // Skip if enemy or player is inactive
+    if (!enemy.active || !this.player.active) return;
 
     const dx = this.player.x - enemy.x;
     const dy = this.player.y - enemy.y;
-    const distSq = dx * dx + dy * dy; // Use squared distance for comparisons
+    const distSq = dx * dx + dy * dy;
     const dist = Math.sqrt(distSq);
 
-    // Common behavior: Stop if too close (unless charging/specific type)
-    const stopDistanceSq = 50 * 50; // Squared stop distance
+    const stopDistance = 50; // Distance to stop from player
+    const stopDistanceSq = stopDistance * stopDistance;
 
-    // --- Type-Specific Logic ---
-    switch (enemy.type) {
-      case "boss":
-        if (enemy.updateAttack) {
-          enemy.updateAttack(time); // Bosses have custom attack logic
-        }
-        // Basic boss movement (can be overridden in specific boss logic)
-        if (dist > 100) { // Keep some distance
-             this.physics.moveToObject(enemy, this.player, enemy.speed * 0.5);
-        } else {
-             enemy.setVelocity(0, 0);
-        }
-        break;
+    // --- Pathfinding Movement Logic ---
+    const pathData = this.enemyPathData.get(enemy.id);
+    let targetX = this.player.x; // Default target is player
+    let targetY = this.player.y;
+    let movingAlongPath = false;
 
-      case "witch":
-        enemy.setVelocity(0, 0); // Witches don't move normally
-        if (!enemy.isTeleporting && time > enemy.lastShootTime + enemy.shootCooldown) {
-            enemy.isTeleporting = true;
-            enemy.lastShootTime = time; // Reset timer immediately
+    if (pathData && pathData.path && pathData.targetNodeIndex < pathData.path.length) {
+        const targetNode = pathData.path[pathData.targetNodeIndex];
+        const nodeWorldPos = this.getWorldCoordinates(targetNode.x, targetNode.y);
+        targetX = nodeWorldPos.x;
+        targetY = nodeWorldPos.y;
+        movingAlongPath = true;
 
-            // 1. Shake effect
-            this.tweens.add({
-                targets: enemy,
-                scaleX: 1.1,
-                scaleY: 0.9,
-                duration: 50,
-                yoyo: true,
-                repeat: 4, // ~400ms shake
-                onComplete: () => {
-                    if (!enemy.active) return; // Check if still active
-                    enemy.setScale(1); // Reset scale
-
-                    // 2. Teleport after shake (with delay)
-                    this.time.delayedCall(enemy.teleportDelay, () => {
-                        if (!enemy.active) return;
-
-                        // Find a valid teleport spot (simple random for now)
-                        // TODO: Add checks to prevent teleporting into walls?
-                        const angle = Math.random() * Math.PI * 2;
-                        const radius = Phaser.Math.Between(100, 200);
-                        const targetX = this.player.x + Math.cos(angle) * radius;
-                        const targetY = this.player.y + Math.sin(angle) * radius;
-
-                        // Clamp position to play area bounds
-                        enemy.x = Phaser.Math.Clamp(targetX, this.playArea.x1, this.playArea.x2);
-                        enemy.y = Phaser.Math.Clamp(targetY, this.playArea.y1, this.playArea.y2);
-
-                        // Visual feedback for teleport (optional)
-                        enemy.alpha = 0.5;
-                        this.time.delayedCall(100, () => { if(enemy.active) enemy.alpha = 1; });
-
-                        // 3. Shoot after teleport (with delay)
-                        this.time.delayedCall(enemy.shootDelay, () => {
-                            if (enemy.active && this.player.active) {
-                                this.shootEnemyProjectile(enemy, this.player.x, this.player.y);
-                            }
-                            // 4. End teleport sequence
-                            enemy.isTeleporting = false;
-                        });
-                    });
-                }
-            });
-        }
-        break;
-
-      case "wizard": // Kiting behavior
-        if (distSq < enemy.fleeDistance * enemy.fleeDistance) {
-            // Too close, move away
-            enemy.setVelocity((-dx / dist) * enemy.speed, (-dy / dist) * enemy.speed);
-        } else if (distSq > enemy.engageDistance * enemy.engageDistance) {
-            // Too far, move closer slowly
-            enemy.setVelocity((dx / dist) * enemy.speed * 0.5, (dy / dist) * enemy.speed * 0.5);
-        } else {
-            // In range, stop moving and shoot
-            enemy.setVelocity(0, 0);
-            if (time > enemy.lastShootTime + enemy.shootCooldown) {
-                this.shootEnemyProjectile(enemy, this.player.x, this.player.y);
-                enemy.lastShootTime = time;
-            }
-        }
-        break;
-
-      case "orc": // Charging behavior
-        if (enemy.isCharging || enemy.isPreparingCharge) {
-            // Handle charging state
-            this.processChargingState(enemy, time);
-        } else if (distSq < 150 * 150 && time > enemy.lastChargeAttempt + enemy.chargeCooldown) { // Range to start charge
-            // Start charge preparation
-            enemy.isPreparingCharge = true;
-            enemy.chargeStartTime = time;
-            enemy.lastChargeAttempt = time; // Start cooldown now
-            enemy.setVelocity(0, 0); // Stop moving during prep
-            enemy.setTint(0xffff00); // Yellow tint during prep
-        } else {
-            // Normal chase behavior when not charging/preparing
-            if (distSq > stopDistanceSq) {
-                 this.physics.moveToObject(enemy, this.player, enemy.speed);
+        const distToNodeSq = Phaser.Math.Distance.Squared(enemy.x, enemy.y, targetX, targetY);
+        if (distToNodeSq < (this.gridCellSize / 1.5) * (this.gridCellSize / 1.5)) { // Increased tolerance for reaching node
+            pathData.targetNodeIndex++;
+            if (pathData.targetNodeIndex >= pathData.path.length) {
+                this.enemyPathData.set(enemy.id, { path: null, targetNodeIndex: -1 });
+                movingAlongPath = false;
+                targetX = this.player.x;
+                targetY = this.player.y;
             } else {
-                 enemy.setVelocity(0, 0);
+                const nextNode = pathData.path[pathData.targetNodeIndex];
+                const nextNodeWorldPos = this.getWorldCoordinates(nextNode.x, nextNode.y);
+                targetX = nextNodeWorldPos.x;
+                targetY = nextNodeWorldPos.y;
             }
         }
-        break;
+    } else {
+        targetX = this.player.x;
+        targetY = this.player.y;
+        movingAlongPath = false;
+    }
 
-      case "shapeshifter":
-        if (time > enemy.behaviorTimer) {
-            // Change behavior periodically
-            const behaviors = ['chase', 'flee', 'shoot', 'circle'];
-            enemy.currentBehavior = Phaser.Utils.Array.GetRandom(behaviors);
-            enemy.behaviorTimer = time + enemy.behaviorChangeTime;
-            // Reset state for new behavior if needed
-            enemy.setVelocity(0,0);
-        }
+    // --- Enemy Type Specific Logic ---
+    switch (enemy.type) {
+        case "boss":
+            if (enemy.updateAttack) enemy.updateAttack(time);
+            if (!enemy.isCharging && !enemy.isPreparingCharge) {
+                if (dist > 150) {
+                    this.physics.moveTo(enemy, targetX, targetY, enemy.speed * 0.5);
+                } else {
+                    enemy.setVelocity(0, 0);
+                }
+            }
+            break;
 
-        // Execute current behavior
-        switch (enemy.currentBehavior) {
-            case 'chase':
-                if (distSq > stopDistanceSq) this.physics.moveToObject(enemy, this.player, enemy.speed);
-                else enemy.setVelocity(0, 0);
-                break;
-            case 'flee':
-                if (distSq < 300 * 300) enemy.setVelocity((-dx / dist) * enemy.speed, (-dy / dist) * enemy.speed);
-                else enemy.setVelocity(0, 0); // Stop fleeing if far enough
-                break;
-            case 'shoot':
-                enemy.setVelocity(0, 0); // Stand still to shoot
+        case "witch":
+            enemy.setVelocity(0, 0);
+            if (!enemy.isTeleporting && time > enemy.lastShootTime + enemy.shootCooldown) {
+                enemy.isTeleporting = true;
+                enemy.lastShootTime = time;
+
+                // 1. Pre-Teleport Shake
+                enemy.setTint(0xff00ff);
+                this.tweens.add({
+                    targets: enemy,
+                    scaleX: enemy.scaleX * 1.1, scaleY: enemy.scaleY * 0.9,
+                    angle: Phaser.Math.Between(-10, 10),
+                    duration: 50, yoyo: true,
+                    repeat: Math.floor(enemy.shakeDuration / 100) - 1,
+                    onComplete: () => {
+                        if (!enemy.active) return;
+                        enemy.setScale(1); enemy.setAngle(0); enemy.clearTint();
+
+                        // 2. Teleport after shake
+                        this.time.delayedCall(enemy.teleportDelay, () => {
+                            if (!enemy.active) return;
+                            let tx, ty, attempts = 0;
+                            do {
+                                const angle = Math.random() * Math.PI * 2;
+                                const radius = Phaser.Math.Between(100, 250);
+                                tx = this.player.x + Math.cos(angle) * radius;
+                                ty = this.player.y + Math.sin(angle) * radius;
+                                attempts++;
+                            } while (attempts < 10 && (tx < this.playArea.x1 || tx > this.playArea.x2 || ty < this.playArea.y1 || ty > this.playArea.y2));
+
+                            enemy.x = Phaser.Math.Clamp(tx, this.playArea.x1 + enemy.width/2, this.playArea.x2 - enemy.width/2);
+                            enemy.y = Phaser.Math.Clamp(ty, this.playArea.y1 + enemy.height/2, this.playArea.y2 - enemy.height/2);
+
+                            enemy.alpha = 0.3;
+                            this.tweens.add({ targets: enemy, alpha: 1, duration: 150 });
+
+                            // *** ARRIVAL SHAKE ***
+                            this.tweens.add({
+                                targets: enemy,
+                                scaleX: enemy.scaleX * 1.1, scaleY: enemy.scaleY * 0.9,
+                                angle: Phaser.Math.Between(-5, 5),
+                                duration: 40, yoyo: true, repeat: 3,
+                                onComplete: () => { if(enemy.active) { enemy.setScale(1); enemy.setAngle(0); } }
+                            });
+                            // *********************
+
+                            // 3. Shoot after teleport
+                            this.time.delayedCall(enemy.shootDelay, () => {
+                                if (enemy.active && this.player.active) {
+                                    this.shootEnemyProjectile(enemy, this.player.x, this.player.y);
+                                }
+                                enemy.isTeleporting = false;
+                            });
+                        });
+                    }
+                });
+            }
+            break;
+
+        case "wizard":
+            if (distSq < enemy.fleeDistance * enemy.fleeDistance) {
+                this.physics.velocityFromAngle(Phaser.Math.Angle.Between(this.player.x, this.player.y, enemy.x, enemy.y), enemy.speed, enemy.body.velocity);
+            } else if (distSq > enemy.engageDistance * enemy.engageDistance) {
+                 if (movingAlongPath || dist > stopDistance + 20) {
+                    this.physics.moveTo(enemy, targetX, targetY, enemy.speed * 0.5);
+                 } else {
+                    enemy.setVelocity(0, 0);
+                 }
+            } else {
+                enemy.setVelocity(0, 0);
                 if (time > enemy.lastShootTime + enemy.shootCooldown) {
                     this.shootEnemyProjectile(enemy, this.player.x, this.player.y);
                     enemy.lastShootTime = time;
                 }
-                break;
-            case 'circle':
-                 // Simple circling logic (adjust radius and speed)
-                 const circleSpeed = enemy.speed * 0.8;
-                 const angleOffset = Math.PI / 2; // Perpendicular offset
-                 const targetAngle = Math.atan2(dy, dx);
-                 const circleAngle = targetAngle + angleOffset;
-                 enemy.setVelocity(Math.cos(circleAngle) * circleSpeed, Math.sin(circleAngle) * circleSpeed);
-                break;
-        }
-        break;
+            }
+            break;
 
-      case "bee": // Simple aggressive chase
-         this.physics.moveToObject(enemy, this.player, enemy.speed);
-         break;
+        case "orc":
+            if (enemy.isCharging || enemy.isPreparingCharge) {
+                this.processChargingState(enemy, time);
+            } else if (distSq < 150 * 150 && time > enemy.lastChargeAttempt + enemy.chargeCooldown) {
+                enemy.isPreparingCharge = true;
+                enemy.chargeStartTime = time;
+                enemy.lastChargeAttempt = time;
+                enemy.setVelocity(0, 0);
+                enemy.setTint(0xffff00);
+            } else {
+                 if (movingAlongPath || dist > stopDistance + 20) {
+                    this.physics.moveTo(enemy, targetX, targetY, enemy.speed);
+                 } else {
+                    enemy.setVelocity(0, 0);
+                 }
+            }
+            break;
 
-      case "blob": // Basic chase and shoot
-      default:
-        if (distSq > stopDistanceSq) {
-           this.physics.moveToObject(enemy, this.player, enemy.speed);
-        } else {
-           enemy.setVelocity(0, 0);
-        }
-        // Shoot if cooldown ready
-        if (enemy.shootCooldown && time > enemy.lastShootTime + enemy.shootCooldown) {
-          this.shootEnemyProjectile(enemy, this.player.x, this.player.y);
-          enemy.lastShootTime = time;
-        }
-        break;
+         case "bee":
+            if (movingAlongPath || dist > stopDistance - 10) { // Bees get closer
+                this.physics.moveTo(enemy, targetX, targetY, enemy.speed);
+            } else {
+                enemy.setVelocity(0,0);
+            }
+            const shadow = enemy.getData('shadow');
+            if (shadow && shadow.active) {
+                shadow.setPosition(enemy.x, enemy.y + 10);
+                shadow.setDepth(enemy.depth - 1);
+            }
+            break;
+
+        case "shapeshifter":
+             if (time > enemy.behaviorTimer) {
+                const behaviors = ['chase', 'flee', 'shoot', 'circle'];
+                enemy.currentBehavior = Phaser.Utils.Array.GetRandom(behaviors);
+                enemy.behaviorTimer = time + enemy.behaviorChangeTime;
+                enemy.setVelocity(0,0);
+             }
+             switch (enemy.currentBehavior) {
+                case 'chase':
+                     if (movingAlongPath || dist > stopDistance) {
+                        this.physics.moveTo(enemy, targetX, targetY, enemy.speed);
+                     } else {
+                        enemy.setVelocity(0, 0);
+                     }
+                     break;
+                case 'flee':
+                     if (distSq < 300 * 300) {
+                        this.physics.velocityFromAngle(Phaser.Math.Angle.Between(this.player.x, this.player.y, enemy.x, enemy.y), enemy.speed, enemy.body.velocity);
+                     } else {
+                        enemy.setVelocity(0, 0);
+                     }
+                     break;
+                case 'shoot':
+                     enemy.setVelocity(0, 0);
+                     if (time > enemy.lastShootTime + enemy.shootCooldown) {
+                        this.shootEnemyProjectile(enemy, this.player.x, this.player.y);
+                        enemy.lastShootTime = time;
+                     }
+                     break;
+                case 'circle':
+                     const circleSpeed = enemy.speed * 0.8;
+                     const desiredDist = 150;
+                     if (dist > desiredDist + 20) {
+                         this.physics.moveTo(enemy, this.player.x, this.player.y, circleSpeed);
+                     } else if (dist < desiredDist - 20) {
+                         this.physics.velocityFromAngle(Phaser.Math.Angle.Between(this.player.x, this.player.y, enemy.x, enemy.y), circleSpeed, enemy.body.velocity);
+                     } else {
+                        const angleOffset = Math.PI / 2;
+                        const targetAngle = Math.atan2(dy, dx);
+                        const circleAngle = targetAngle + angleOffset;
+                        enemy.setVelocity(Math.cos(circleAngle) * circleSpeed, Math.sin(circleAngle) * circleSpeed);
+                     }
+                    break;
+             }
+             break;
+
+
+        case "blob":
+        default:
+             if (movingAlongPath || dist > stopDistance) {
+                this.physics.moveTo(enemy, targetX, targetY, enemy.speed);
+             } else {
+                enemy.setVelocity(0, 0);
+             }
+             if (enemy.shootCooldown && time > enemy.lastShootTime + enemy.shootCooldown) {
+                 this.shootEnemyProjectile(enemy, this.player.x, this.player.y);
+                 enemy.lastShootTime = time;
+             }
+             break;
     }
-  }
+}
 
 
   createBossRoom() {
     const bossTypes = {
-      1: { sprite: 'boss1', health: 200, speed: 80, pattern: 'circle', attackDelay: 2000, projectileSpeed: 150 },
-      2: { sprite: 'boss2', health: 250, speed: 90, pattern: 'charge', attackDelay: 2500, projectileSpeed: 180, chargePrepareTime: 1000, chargeDuration: 600, chargeSpeed: 300 },
-      3: { sprite: 'boss3', health: 300, speed: 100, pattern: 'split', attackDelay: 3000, projectileSpeed: 200, splitDelay: 800 },
-      4: { sprite: 'boss4', health: 350, speed: 110, pattern: 'spiral', attackDelay: 1500, projectileSpeed: 220, spiralCount: 5 }, // Faster attacks
-      5: { sprite: 'boss5', health: 400, speed: 120, pattern: 'waves', attackDelay: 2600, projectileSpeed: 240, waveCount: 5, waveSpread: Math.PI / 3 },
-      6: { sprite: 'boss', health: 500, speed: 100, pattern: 'combo', attackDelay: 3500, projectileSpeed: 210 } // Example final boss
+      1: { sprite: 'boss1', health: 200, speed: 80, patterns: ['circle', 'targeted'], attackDelay: 2500, projectileSpeed: 150 },
+      2: { sprite: 'boss2', health: 250, speed: 90, patterns: ['charge', 'spread'], attackDelay: 3000, projectileSpeed: 180, chargePrepareTime: 1000, chargeDuration: 600, chargeSpeed: 300 },
+      3: { sprite: 'boss3', health: 300, speed: 100, patterns: ['split', 'wave', 'summon_blob'], attackDelay: 2800, projectileSpeed: 200, splitDelay: 800 },
+      4: { sprite: 'boss4', health: 350, speed: 110, patterns: ['spiral', 'charge', 'targeted_fast'], attackDelay: 2000, projectileSpeed: 220, spiralCount: 5, chargePrepareTime: 800, chargeDuration: 500, chargeSpeed: 350 },
+      5: { sprite: 'boss5', health: 400, speed: 120, patterns: ['waves', 'split', 'summon_bee'], attackDelay: 2600, projectileSpeed: 240, waveCount: 5, waveSpread: Math.PI / 3, splitDelay: 700 },
+      6: { sprite: 'boss', health: 500, speed: 100, patterns: ['combo', 'charge', 'summon_wizard', 'spiral_fast'], attackDelay: 2400, projectileSpeed: 210, chargePrepareTime: 900, chargeDuration: 550, chargeSpeed: 320, spiralCount: 7 }
     };
 
-    const bossConfig = bossTypes[this.currentWorld] || bossTypes[1]; // Default to world 1 boss if config missing
-    const boss = this.enemies.create(400, 150, bossConfig.sprite); // Spawn near top center
-    if (!boss || !boss.body) return; // Creation check
+    const bossConfig = bossTypes[this.currentWorld] || bossTypes[1];
+    const boss = this.enemies.create(400, 150, bossConfig.sprite);
+    if (!boss || !boss.body) return;
 
-    boss.setScale(2); // Bosses are larger
+    boss.setScale(2);
     boss.health = this.hardMode ? Math.ceil(bossConfig.health * 1.5) : bossConfig.health;
     boss.maxHealth = boss.health;
     boss.speed = bossConfig.speed;
-    boss.type = 'boss'; // Critical for specific handling
-    boss.pattern = bossConfig.pattern;
+    boss.type = 'boss';
     boss.attackDelay = bossConfig.attackDelay;
     boss.projectileSpeed = bossConfig.projectileSpeed;
-    boss.lastAttackTime = this.time.now + 1000; // Small delay before first attack
-    boss.attackPhase = 0; // Used for patterns like spiral/circle
+    boss.lastAttackTime = this.time.now + 1500;
+    boss.attackPhase = 0; // For circle/spiral rotation
 
-    // Pattern-specific properties
+    // Pattern-specific properties from config
     boss.chargePrepareTime = bossConfig.chargePrepareTime;
     boss.chargeDuration = bossConfig.chargeDuration;
     boss.chargeSpeed = bossConfig.chargeSpeed;
     boss.isPreparingCharge = false;
     boss.isCharging = false;
-
     boss.splitDelay = bossConfig.splitDelay;
     boss.spiralCount = bossConfig.spiralCount;
     boss.waveCount = bossConfig.waveCount;
     boss.waveSpread = bossConfig.waveSpread;
 
     boss.setCollideWorldBounds(true);
-    boss.setImmovable(true); // Bosses often shouldn't be pushed easily
+    boss.body.onWorldBounds = true;
+    boss.setImmovable(true);
+    boss.body.setSize(boss.width * 0.7, boss.height * 0.7);
+    boss.id = Phaser.Utils.String.UUID(); // Unique ID
 
-    // --- Boss Attack Logic ---
+    // --- Setup Attack Patterns ---
+    boss.attackFunctions = {
+        'circle': this.bossAttack_CircleShot,
+        'targeted': this.bossAttack_SingleTargeted,
+        'targeted_fast': this.bossAttack_SingleTargetedFast, // New variation
+        'charge': this.bossAttack_Charge,
+        'spread': this.bossAttack_ShotgunSpread,
+        'split': this.bossAttack_SplitShot,
+        'wave': this.bossAttack_WaveShot,
+        'spiral': this.bossAttack_SpiralShot,
+        'spiral_fast': this.bossAttack_SpiralShotFast, // New variation
+        'summon_blob': (b, t) => this.bossAttack_SummonMinions(b, t, 'blob', 2), // Use lambda for parameters
+        'summon_bee': (b, t) => this.bossAttack_SummonMinions(b, t, 'bee', 3),
+        'summon_wizard': (b, t) => this.bossAttack_SummonMinions(b, t, 'wizard', 1),
+        'combo': this.bossAttack_Combo // Example combo attack
+    };
+    boss.availablePatterns = bossConfig.patterns || ['circle']; // Get patterns from config
+    boss.currentAttackIndex = Phaser.Math.Between(0, boss.availablePatterns.length - 1); // Start random
+
+    // --- Boss Main Attack Logic ---
     boss.updateAttack = (time) => {
         if (!boss.active || !this.player.active) return;
-
-        // Handle charging state separately
         if (boss.isCharging || boss.isPreparingCharge) {
             this.processChargingState(boss, time);
-            return; // Don't execute normal attacks while charging
+            return;
         }
-
-        // Check attack cooldown
         if (time < boss.lastAttackTime + boss.attackDelay) return;
 
-        boss.lastAttackTime = time;
-        const intensity = 0.008; // Screen shake intensity
-        const duration = 300; // Screen shake duration
+        // Select the next attack pattern name
+        const patternName = boss.availablePatterns[boss.currentAttackIndex];
+        const attackFunction = boss.attackFunctions[patternName];
 
-        // Execute attack based on pattern
-        switch (boss.pattern) {
-            case 'circle':
-                const circleCount = 8;
-                for (let i = 0; i < circleCount; i++) {
-                    const angle = (i / circleCount) * Math.PI * 2 + boss.attackPhase;
-                    this.createBossProjectile(boss.x, boss.y, Math.cos(angle) * boss.projectileSpeed, Math.sin(angle) * boss.projectileSpeed);
-                }
-                boss.attackPhase += Math.PI / 16; // Rotate pattern slightly each time
-                this.shake(intensity, duration);
-                break;
-
-            case 'charge':
-                // Initiate charge preparation
-                boss.isPreparingCharge = true;
-                boss.chargeStartTime = time;
-                boss.setVelocity(0, 0);
-                boss.setTint(0xffa500); // Orange tint during prep
-                break;
-
-            case 'split':
-                const splitAngles = [0, Math.PI / 2, Math.PI, (3 * Math.PI) / 2]; // 4 directions
-                splitAngles.forEach(angle => {
-                    const proj = this.createBossProjectile(boss.x, boss.y, Math.cos(angle) * boss.projectileSpeed, Math.sin(angle) * boss.projectileSpeed);
-                    if (proj) {
-                        // Schedule the split
-                        this.time.delayedCall(boss.splitDelay, () => {
-                            if (proj.active) { // Check if original projectile still exists
-                                const splitCount = 3;
-                                for (let i = 0; i < splitCount; i++) {
-                                    const splitAngle = angle + (i - 1) * (Math.PI / 6); // Small spread
-                                    this.createBossProjectile(proj.x, proj.y, Math.cos(splitAngle) * boss.projectileSpeed * 0.7, Math.sin(splitAngle) * boss.projectileSpeed * 0.7);
-                                }
-                                proj.destroy(); // Destroy original after splitting
-                            }
-                        });
-                    }
-                });
-                this.shake(intensity * 0.8, duration);
-                break;
-
-            case 'spiral':
-                for (let i = 0; i < boss.spiralCount; i++) {
-                    const spiralAngle = boss.attackPhase + (i * Math.PI * 2 / boss.spiralCount);
-                    this.createBossProjectile(boss.x, boss.y, Math.cos(spiralAngle) * boss.projectileSpeed, Math.sin(spiralAngle) * boss.projectileSpeed);
-                }
-                boss.attackPhase += Math.PI / 12; // Adjust rotation speed
-                this.shake(intensity * 0.6, duration);
-                break;
-
-            case 'waves':
-                const baseAngle = Phaser.Math.Angle.Between(boss.x, boss.y, this.player.x, this.player.y);
-                for (let i = 0; i < boss.waveCount; i++) {
-                    // Calculate angle for each projectile in the wave
-                    const offset = (i - (boss.waveCount - 1) / 2) * (boss.waveSpread / (boss.waveCount > 1 ? boss.waveCount - 1 : 1));
-                    const angle = baseAngle + offset;
-                    this.createBossProjectile(boss.x, boss.y, Math.cos(angle) * boss.projectileSpeed, Math.sin(angle) * boss.projectileSpeed);
-                }
-                this.shake(intensity * 0.7, duration);
-                break;
-
-            case 'combo': // Example: Mix of circle and targeted shots
-                 // Circle part
-                 const comboCircleCount = 6;
-                 for (let i = 0; i < comboCircleCount; i++) {
-                     const angle = (i / comboCircleCount) * Math.PI * 2 + boss.attackPhase;
-                     this.createBossProjectile(boss.x, boss.y, Math.cos(angle) * boss.projectileSpeed * 0.8, Math.sin(angle) * boss.projectileSpeed * 0.8);
-                 }
-                 boss.attackPhase += Math.PI / 10;
-                 // Targeted part (after a small delay)
-                 this.time.delayedCall(300, () => {
-                     if(boss.active && this.player.active) {
-                         const targetAngle = Phaser.Math.Angle.Between(boss.x, boss.y, this.player.x, this.player.y);
-                         this.createBossProjectile(boss.x, boss.y, Math.cos(targetAngle) * boss.projectileSpeed, Math.sin(targetAngle) * boss.projectileSpeed);
-                     }
-                 });
-                 this.shake(intensity, duration);
-                 break;
+        if (attackFunction) {
+            attackFunction.call(this, boss, time); // Execute the attack
+        } else {
+            console.warn(`Boss attack pattern ${patternName} not found!`);
+            // Fallback to a default attack?
+            this.bossAttack_CircleShot(boss, time);
         }
+
+        // Move to the next pattern (can be random or sequential)
+        // Let's make it random to increase unpredictability
+        boss.currentAttackIndex = Phaser.Math.Between(0, boss.availablePatterns.length - 1);
+        // Avoid repeating the exact same attack immediately (optional)
+        // if (boss.availablePatterns.length > 1) {
+        //     let nextIndex;
+        //     do {
+        //         nextIndex = Phaser.Math.Between(0, boss.availablePatterns.length - 1);
+        //     } while (nextIndex === boss.currentAttackIndex);
+        //     boss.currentAttackIndex = nextIndex;
+        // }
+
+
+        boss.lastAttackTime = time; // Reset cooldown timer
     };
-    this.roomActive = true; // Mark room as active
+
+    this.roomActive = true;
   }
 
+  // --- Define Separate Boss Attack Functions ---
+  // (Place these as methods within the MainGameScene class)
+
+  bossAttack_CircleShot(boss, time) {
+    // console.log("Boss using Circle Shot");
+    const circleCount = 8;
+    const intensity = 0.005;
+    const duration = 200;
+    for (let i = 0; i < circleCount; i++) {
+        const angle = (i / circleCount) * Math.PI * 2 + boss.attackPhase;
+        this.createBossProjectile(boss.x, boss.y, Math.cos(angle) * boss.projectileSpeed, Math.sin(angle) * boss.projectileSpeed);
+    }
+    boss.attackPhase += Math.PI / 16;
+    this.shake(intensity, duration);
+  }
+
+  bossAttack_SingleTargeted(boss, time) {
+    // console.log("Boss using Single Targeted");
+    const intensity = 0.003;
+    const duration = 150;
+     if(this.player.active) {
+         const targetAngle = Phaser.Math.Angle.Between(boss.x, boss.y, this.player.x, this.player.y);
+         this.createBossProjectile(boss.x, boss.y, Math.cos(targetAngle) * boss.projectileSpeed * 1.2, Math.sin(targetAngle) * boss.projectileSpeed * 1.2); // Slightly faster
+     }
+     this.shake(intensity, duration);
+  }
+   bossAttack_SingleTargetedFast(boss, time) { // New variation
+    // console.log("Boss using Single Targeted Fast");
+    const intensity = 0.004;
+    const duration = 100;
+     if(this.player.active) {
+         const targetAngle = Phaser.Math.Angle.Between(boss.x, boss.y, this.player.x, this.player.y);
+         this.createBossProjectile(boss.x, boss.y, Math.cos(targetAngle) * boss.projectileSpeed * 1.5, Math.sin(targetAngle) * boss.projectileSpeed * 1.5); // Even faster
+     }
+     this.shake(intensity, duration);
+  }
+
+
+  bossAttack_Charge(boss, time) {
+    // console.log("Boss using Charge");
+    if (!boss.isCharging && !boss.isPreparingCharge) {
+        boss.isPreparingCharge = true;
+        boss.chargeStartTime = time;
+        boss.setVelocity(0, 0);
+        boss.setTint(0xffa500);
+    }
+  }
+
+  bossAttack_ShotgunSpread(boss, time) {
+    // console.log("Boss using Shotgun Spread");
+    const intensity = 0.006;
+    const duration = 250;
+    const spreadCount = 5;
+    const spreadAngle = Math.PI / 12; // Total angle
+     if(this.player.active) {
+         const baseAngle = Phaser.Math.Angle.Between(boss.x, boss.y, this.player.x, this.player.y);
+         for (let i = 0; i < spreadCount; i++) {
+             const angle = baseAngle + (i - (spreadCount - 1) / 2) * (spreadAngle / (spreadCount > 1 ? spreadCount - 1 : 1));
+             this.createBossProjectile(boss.x, boss.y, Math.cos(angle) * boss.projectileSpeed * 0.9, Math.sin(angle) * boss.projectileSpeed * 0.9); // Slightly slower
+         }
+     }
+     this.shake(intensity, duration);
+  }
+
+  bossAttack_SplitShot(boss, time) {
+    //  console.log("Boss using Split Shot");
+     const intensity = 0.007;
+     const duration = 280;
+     const splitAngles = [0, Math.PI / 2, Math.PI, (3 * Math.PI) / 2];
+     splitAngles.forEach(angle => {
+         const proj = this.createBossProjectile(boss.x, boss.y, Math.cos(angle) * boss.projectileSpeed, Math.sin(angle) * boss.projectileSpeed);
+         if (proj) {
+             this.time.delayedCall(boss.splitDelay || 800, () => { // Use boss property or default
+                 if (proj.active) {
+                     const splitCount = 3;
+                     for (let i = 0; i < splitCount; i++) {
+                         const splitAngle = angle + (i - 1) * (Math.PI / 6);
+                         this.createBossProjectile(proj.x, proj.y, Math.cos(splitAngle) * boss.projectileSpeed * 0.7, Math.sin(splitAngle) * boss.projectileSpeed * 0.7);
+                     }
+                     proj.destroy();
+                 }
+             });
+         }
+     });
+     this.shake(intensity, duration);
+  }
+
+  bossAttack_WaveShot(boss, time) {
+    //  console.log("Boss using Wave Shot");
+     const intensity = 0.007;
+     const duration = 260;
+     const waveCount = boss.waveCount || 5;
+     const waveSpread = boss.waveSpread || Math.PI / 3;
+      if(this.player.active) {
+          const baseAngle = Phaser.Math.Angle.Between(boss.x, boss.y, this.player.x, this.player.y);
+          for (let i = 0; i < waveCount; i++) {
+              const offset = (i - (waveCount - 1) / 2) * (waveSpread / (waveCount > 1 ? waveCount - 1 : 1));
+              const angle = baseAngle + offset;
+              this.createBossProjectile(boss.x, boss.y, Math.cos(angle) * boss.projectileSpeed, Math.sin(angle) * boss.projectileSpeed);
+          }
+      }
+      this.shake(intensity, duration);
+  }
+
+  bossAttack_SpiralShot(boss, time) {
+    //  console.log("Boss using Spiral Shot");
+     const intensity = 0.004;
+     const duration = 200;
+     const spiralCount = boss.spiralCount || 5;
+     for (let i = 0; i < spiralCount; i++) {
+         const spiralAngle = boss.attackPhase + (i * Math.PI * 2 / spiralCount);
+         this.createBossProjectile(boss.x, boss.y, Math.cos(spiralAngle) * boss.projectileSpeed, Math.sin(spiralAngle) * boss.projectileSpeed);
+     }
+     boss.attackPhase += Math.PI / 12;
+     this.shake(intensity, duration);
+  }
+
+  bossAttack_SpiralShotFast(boss, time) { // New variation
+    //  console.log("Boss using Spiral Shot Fast");
+     const intensity = 0.005;
+     const duration = 150;
+     const spiralCount = boss.spiralCount || 7; // Use boss property or default
+     for (let i = 0; i < spiralCount; i++) {
+         const spiralAngle = boss.attackPhase + (i * Math.PI * 2 / spiralCount);
+         this.createBossProjectile(boss.x, boss.y, Math.cos(spiralAngle) * boss.projectileSpeed * 1.1, Math.sin(spiralAngle) * boss.projectileSpeed * 1.1); // Slightly faster
+     }
+     boss.attackPhase += Math.PI / 8; // Faster rotation
+     this.shake(intensity, duration);
+  }
+
+
+  bossAttack_SummonMinions(boss, time, minionType, count) {
+    // console.log(`Boss summoning ${count} ${minionType}(s)`);
+    const intensity = 0.01; // Bigger shake for summoning
+    const duration = 400;
+    for (let i = 0; i < count; i++) {
+        // Spawn minions near the boss, but not directly on top
+        const angle = (i / count) * Math.PI * 2 + Math.random() * 0.5; // Add randomness
+        const radius = 80 + Math.random() * 20;
+        const spawnX = boss.x + Math.cos(angle) * radius;
+        const spawnY = boss.y + Math.sin(angle) * radius;
+        // Add small delay between spawns?
+        this.time.delayedCall(i * 150, () => {
+             // Clamp spawn position just in case
+             const clampedX = Phaser.Math.Clamp(spawnX, this.playArea.x1 + 20, this.playArea.x2 - 20);
+             const clampedY = Phaser.Math.Clamp(spawnY, this.playArea.y1 + 20, this.playArea.y2 - 20);
+             this.createEnemy(clampedX, clampedY, minionType);
+        });
+    }
+    this.shake(intensity, duration);
+  }
+
+  bossAttack_Combo(boss, time) { // Example Combo
+    // console.log("Boss using Combo Attack");
+    // Part 1: Circle shot
+    this.bossAttack_CircleShot(boss, time);
+    // Part 2: Delayed targeted shot
+    this.time.delayedCall(500, () => {
+        if (boss.active) {
+            this.bossAttack_SingleTargetedFast(boss, time);
+        }
+    });
+     // Part 3: Another delayed action? Maybe short charge prep?
+     this.time.delayedCall(1000, () => {
+         if (boss.active && !boss.isCharging && !boss.isPreparingCharge) {
+            // Briefly flash for a potential follow-up? Or just end combo.
+         }
+     });
+  }
+
+
   shootEnemyProjectile(enemy, targetX, targetY) {
-    if (!enemy.active) return; // Don't shoot if enemy is dead
+    if (!enemy.active) return;
 
     const angle = Phaser.Math.Angle.Between(enemy.x, enemy.y, targetX, targetY);
-    const speed = (enemy.type === 'wizard' || enemy.type === 'witch') ? 200 : 150; // Adjust speed per type
-    const texture = (enemy.type === 'witch') ? 'boss_projectile' : 'blob_projectile'; // Witch uses different projectile?
-    const scale = 1; // Adjust scale if needed
+    let speed = 150;
+    let texture = 'blob_projectile'; // Default
+    let scale = 1;
+
+    // --- Select texture and properties based on enemy type ---
+    switch (enemy.type) {
+        case 'wizard':
+            texture = 'wizard_projectile';
+            speed = 200;
+            scale = 1.1;
+            break;
+        case 'witch':
+            texture = 'witch_projectile';
+            speed = 180;
+            scale = 1.2;
+            break;
+        case 'quasit':
+            texture = 'quasit_projectile'; // Using the quail asset name
+            speed = 160;
+            scale = 1;
+            break;
+        case 'blob':
+        case 'shapeshifter': // Shapeshifter uses blob projectile?
+            texture = 'blob_projectile';
+            speed = 150;
+            scale = 1;
+            break;
+        // Add other enemy types if they shoot
+    }
+    // --- End selection ---
 
     const proj = this.enemyProj.create(enemy.x, enemy.y, texture);
     if (!proj) return; // Pool check
@@ -1760,41 +2004,43 @@ class MainGameScene extends Phaser.Scene {
 
 
   onHitEnemy(proj, enemy) {
-    if (!proj.active || !enemy.active) return; // Ignore if either is already inactive
+    if (!proj.active || !enemy.active) return;
 
-    // Visual feedback: Tint red briefly
     enemy.setTint(0xff0000);
     this.time.delayedCall(100, () => {
-      if (enemy.active) enemy.clearTint(); // Check active before clearing tint
+      if (enemy.active) enemy.clearTint();
     });
 
-    // Apply damage
-    enemy.health -= proj.damage; // Use damage property from projectile
-    proj.destroy(); // Destroy the projectile
+    enemy.health -= proj.damage;
+    proj.destroy();
 
-    // Check for enemy death
     if (enemy.health <= 0) {
-      // --- Enemy Defeated ---
-      enemy.destroy(); // Remove enemy sprite and body
+      // *** Add this for Bee shadow cleanup ***
+      if (enemy.type === 'bee') {
+          const shadow = enemy.getData('shadow');
+          if (shadow) {
+              shadow.destroy();
+          }
+      }
+      // Remove path data when enemy dies
+      this.enemyPathData.delete(enemy.id);
 
-      // Drop rewards
+      enemy.destroy();
+
       if (enemy.type === "boss") {
-        // Bosses always drop an upgrade
         this.dropRandomUpgrade(enemy.x, enemy.y);
-        this.onBossDefeated(); // Trigger boss defeat sequence (next level, etc.)
-        // Sound played in onBossDefeated
+        this.onBossDefeated();
       } else {
-        // Regular enemies drop coins (maybe chance for health?)
         this.coins++;
         this.coinsText.setText(`Coins: ${this.coins}`);
-        // Potential health drop chance
-        if (Phaser.Math.Between(1, 20) === 1) { // 5% chance
-            // Create a small health pickup? (Needs asset and pickup logic)
+        if (Phaser.Math.Between(1, 20) === 1) {
+            // Maybe drop health pickup here later
         }
       }
 
       // Check if room is now clear
-      if (this.roomActive && this.enemies.countActive() === 0) {
+      if (this.roomActive && this.enemies.countActive(true) === 0) {
+          console.log("Room Cleared!");
           this.roomActive = false;
           this.openAllDoors();
           this.clearedRooms.add(`${this.currentRoom.x},${this.currentRoom.y}`);
@@ -1807,133 +2053,83 @@ class MainGameScene extends Phaser.Scene {
     if (!enemy.active) return;
 
     if (enemy.isPreparingCharge) {
-      // Check if preparation time is over
       if (time > enemy.chargeStartTime + enemy.chargePrepareTime) {
         enemy.isPreparingCharge = false;
         enemy.isCharging = true;
-        enemy.chargeEndTime = time + enemy.chargeDuration; // Calculate when charge ends
+        enemy.chargeEndTime = time + enemy.chargeDuration;
 
-        // Determine charge direction towards player's position *at the start of the charge*
         const targetX = this.player.x;
         const targetY = this.player.y;
         const angle = Phaser.Math.Angle.Between(enemy.x, enemy.y, targetX, targetY);
 
-        // Set velocity for the charge
         enemy.setVelocity(
           Math.cos(angle) * enemy.chargeSpeed,
           Math.sin(angle) * enemy.chargeSpeed
         );
-
-        // Visual feedback for charging
-        enemy.setTint(0xff0000); // Red tint while charging
+        enemy.setTint(0xff0000);
       }
     } else if (enemy.isCharging) {
-      // Check if charge duration is over
       if (time > enemy.chargeEndTime) {
         enemy.isCharging = false;
         enemy.clearTint();
-        enemy.setVelocity(0, 0); // Stop after charging
-        // enemy.lastShootTime = time; // Use if charge acts as an "attack" for cooldown purposes
+        enemy.setVelocity(0, 0);
       }
-      // Note: Collision handling during charge is done in setupColliders
     }
   }
 
 
   dropRandomUpgrade(x, y) {
-    // Define possible upgrades and their corresponding icons
     const upgradeOptions = [
-      { key: "hp", icon: "hp_icon" },
-      { key: "damage", icon: "damage_icon" },
-      { key: "speed", icon: "speed_icon" },
-      { key: "doubleShot", icon: "doubleshot_icon" },
-      { key: "splitShot", icon: "splitshot_icon" },
-      { key: "dodge", icon: "dodge_icon" },
-      // Add more potential upgrades here if needed
+      { key: "hp", icon: "hp_icon" }, { key: "damage", icon: "damage_icon" },
+      { key: "speed", icon: "speed_icon" }, { key: "doubleShot", icon: "doubleshot_icon" },
+      { key: "splitShot", icon: "splitshot_icon" }, { key: "dodge", icon: "dodge_icon" },
     ];
 
-    // Choose a random upgrade
     const chosenUpgrade = Phaser.Utils.Array.GetRandom(upgradeOptions);
-
-    // Create the pickup sprite at the specified location
     const pickup = this.pickups.create(x, y, chosenUpgrade.icon);
-    if (!pickup) return; // Check if creation failed
+    if (!pickup) return;
 
-    pickup.upgradeType = chosenUpgrade.key; // Store the type of upgrade this pickup represents
-    pickup.setScale(1.2); // Make it slightly larger and more visible
+    pickup.upgradeType = chosenUpgrade.key;
+    pickup.setScale(1.2);
 
-    // Add a visual effect (e.g., pulsing scale or floating)
-    this.tweens.add({
-      targets: pickup,
-      scale: 1.4, // Pulse slightly larger
-      yoyo: true, // Scale back down
-      repeat: -1, // Repeat indefinitely
-      duration: 500, // Duration of one pulse cycle
-      ease: 'Sine.easeInOut'
-    });
-
-    // Optional: Add floating effect
-    this.tweens.add({
-        targets: pickup,
-        y: y - 10, // Float up
-        yoyo: true,
-        repeat: -1,
-        duration: 1000, // Slower duration for floating
-        ease: 'Sine.easeInOut'
-    });
+    this.tweens.add({ targets: pickup, scale: 1.4, yoyo: true, repeat: -1, duration: 500, ease: 'Sine.easeInOut' });
+    this.tweens.add({ targets: pickup, y: y - 10, yoyo: true, repeat: -1, duration: 1000, ease: 'Sine.easeInOut' });
   }
 
   onPickup(player, pickup) {
-    if (!pickup.active) return; // Ignore if pickup already collected
+    if (!pickup.active) return;
 
-    this.sounds.powerup.play(); // Play powerup sound effect
+    this.sounds.powerup.play();
 
-    // Apply the upgrade based on the pickup's type
     switch (pickup.upgradeType) {
       case "hp":
         this.player.maxHealth += 2;
-        // Heal the player by the amount gained, up to the new max health
         this.player.health = Math.min(this.player.health + 2, this.player.maxHealth);
         this.upgrades.hp++;
-        this.updateHearts(); // Update heart display immediately
+        this.updateHearts();
         break;
-      case "damage":
-        this.damageMultiplier += 0.3; // Increase damage multiplier
-        this.upgrades.damage++;
-        break;
-      case "speed":
-        this.playerSpeed += 20; // Increase base player speed
-        this.upgrades.speed++;
-        break;
-      case "doubleShot":
-        this.upgrades.doubleShot++; // Increment double shot level
-        break;
-      case "splitShot":
-        this.upgrades.splitShot++; // Increment split shot level (more projectiles per side)
-        break;
+      case "damage": this.damageMultiplier += 0.3; this.upgrades.damage++; break;
+      case "speed": this.playerSpeed += 20; this.upgrades.speed++; break;
+      case "doubleShot": this.upgrades.doubleShot++; break;
+      case "splitShot": this.upgrades.splitShot++; break;
       case "dodge":
-        if (this.upgrades.dodge < 5) { // Add a cap to dodges? (e.g., max 5)
+        if (this.upgrades.dodge < 5) {
             this.upgrades.dodge++;
-            this.dodgeCount++; // Immediately gain the extra dodge charge
-            // Add a new null entry to the cooldowns array
-            this.dodgeCooldowns.push(null);
-            // Update the dodge UI (called in main update loop)
+            this.dodgeCount++;
+            this.dodgeCooldowns.push(null); // Add placeholder for new slot
         } else {
-            // If max dodges reached, maybe give coins instead?
             this.coins += 5;
             this.coinsText.setText(`Coins: ${this.coins}`);
             this.showTempMessage("Max Dodges Reached! +5 Coins");
         }
         break;
-      // Add cases for other pickup types (e.g., coins, health potions) if implemented
     }
 
-    this.updatePowerupIcons(); // Update the display of collected powerups
-    pickup.destroy(); // Remove the pickup item from the game
+    this.updatePowerupIcons();
+    pickup.destroy();
   }
 
   createShopRoom() {
-    // Define the items available in the shop
     const shopItems = [
       { key: 'hp', name: 'Max Health +2', icon: 'hp_icon', cost: 5, type: 'upgrade', desc: '+2 max health' },
       { key: 'damage', name: 'Damage Up', icon: 'damage_icon', cost: 10, type: 'upgrade', desc: '+0.3 damage mult' },
@@ -1944,133 +2140,74 @@ class MainGameScene extends Phaser.Scene {
       { key: 'heal', name: 'Health Potion', icon: 'hp_icon', cost: 5, type: 'consumable', desc: 'Restore 2 health' }
     ];
 
-    // Randomly select 3 items to display (ensure no duplicates if possible)
     const selection = Phaser.Utils.Array.Shuffle(shopItems).slice(0, 3);
-    this.shopIcons = []; // Array to store shop item sprites and texts
+    this.shopIcons = [];
 
-    // Display the selected items
     selection.forEach((item, i) => {
-      const x = 250 + i * 150; // Position items horizontally
-      const y = 300; // Vertical position of items
+      const x = 250 + i * 150;
+      const y = 300;
 
-      // Create item sprite
-      const sprite = this.add.image(x, y, item.icon)
-        .setScale(1.5) // Make icons noticeable
-        .setInteractive({ useHandCursor: true }); // Make it clickable
+      const sprite = this.add.image(x, y, item.icon).setScale(1.5).setInteractive({ useHandCursor: true });
+      const text = this.add.text(x, y + 50, `${item.name}\nCost: ${item.cost}`, { font: '16px Arial', fill: '#fff', align: 'center', backgroundColor: '#000a', padding: { x: 5, y: 2 } }).setOrigin(0.5);
+      const desc = this.add.text(x, y + 90, item.desc, { font: '12px Arial', fill: '#bbb', align: 'center', wordWrap: { width: 120 } }).setOrigin(0.5);
 
-      // Create item name and cost text
-      const text = this.add.text(x, y + 50, `${item.name}\nCost: ${item.cost}`, {
-        font: '16px Arial',
-        fill: '#fff',
-        align: 'center',
-        backgroundColor: '#000a', // Semi-transparent background
-        padding: { x: 5, y: 2 }
-      }).setOrigin(0.5);
-
-      // Create item description text
-      const desc = this.add.text(x, y + 90, item.desc, {
-        font: '12px Arial',
-        fill: '#bbb',
-        align: 'center',
-        wordWrap: { width: 120 } // Wrap description text
-      }).setOrigin(0.5);
-
-      // Store references
       const itemGroup = { sprite, text, desc, itemData: item };
       this.shopIcons.push(itemGroup);
 
-      // Handle purchase on click/tap
       sprite.on('pointerdown', () => {
         if (this.coins >= item.cost) {
-          // Sufficient coins
           this.coins -= item.cost;
           this.coinsText.setText(`Coins: ${this.coins}`);
-          this.sounds.upgrade.play(); // Use upgrade sound for purchase
+          this.sounds.upgrade.play();
 
-          // Apply effect based on type
           if (item.type === 'upgrade') {
-            // Use the onPickup logic to apply the upgrade
-            this.onPickup(this.player, {
-              upgradeType: item.key,
-              active: true, // Mock active state for onPickup
-              destroy: () => {} // Mock destroy function
-            });
+            this.onPickup(this.player, { upgradeType: item.key, active: true, destroy: () => {} });
             this.showTempMessage(`Purchased: ${item.name}`);
-          } else if (item.type === 'consumable') {
-            if (item.key === 'heal') {
-              const healthBefore = this.player.health;
-              this.player.health = Math.min(this.player.maxHealth, this.player.health + 2);
-              const healedAmount = this.player.health - healthBefore;
-              if (healedAmount > 0) {
-                  this.updateHearts();
-                  this.showTempMessage(`Healed ${healedAmount} health!`);
-                  this.sounds.powerup.play(); // Use powerup sound for heal
-              } else {
-                  this.showTempMessage(`Already at full health!`);
-                  // Refund? Or just waste the purchase? Let's waste it for now.
-                  // this.coins += item.cost; // Uncomment to refund
-                  // this.coinsText.setText(`Coins: ${this.coins}`);
-              }
+          } else if (item.type === 'consumable' && item.key === 'heal') {
+            const healthBefore = this.player.health;
+            this.player.health = Math.min(this.player.maxHealth, this.player.health + 2);
+            const healedAmount = this.player.health - healthBefore;
+            if (healedAmount > 0) {
+                this.updateHearts();
+                this.showTempMessage(`Healed ${healedAmount} health!`);
+                this.sounds.powerup.play();
+            } else {
+                this.showTempMessage(`Already at full health!`);
             }
           }
 
-          // Remove the purchased item from the shop display
-          sprite.disableInteractive().setTint(0x555555); // Grey out and disable
-          text.setVisible(false); // Hide text
+          sprite.disableInteractive().setTint(0x555555);
+          text.setVisible(false);
           desc.setVisible(false);
-          // Optionally, completely destroy the elements:
-          // sprite.destroy();
-          // text.destroy();
-          // desc.destroy();
 
         } else {
-          // Not enough coins
           this.showTempMessage('Not enough coins!');
-          this.sounds.death.play({volume: 0.3}); // Play a failure sound quietly
+          this.sounds.death.play({volume: 0.3});
         }
       });
 
-      // Show description on hover (desktop)
       if (!this.isMobile) {
           sprite.on('pointerover', () => desc.setVisible(true));
           sprite.on('pointerout', () => desc.setVisible(false));
-          desc.setVisible(false); // Initially hidden
+          desc.setVisible(false);
       } else {
-          desc.setVisible(true); // Always visible on mobile
+          desc.setVisible(true);
       }
-
     });
 
-    // Display general shop instructions
-    this.shopPrompt.setText('Shop: Tap an item to buy')
-        .setPosition(400, 180) // Position instructions above items
-        .setVisible(true);
+    this.shopPrompt.setText('Shop: Tap an item to buy').setPosition(400, 180).setVisible(true);
   }
 
 
   showTempMessage(text) {
-    // Check if a message is already displayed, remove it first
     if (this.tempMessage) {
         this.tempMessage.destroy();
     }
-
-    const msg = this.add
-      .text(400, 100, text, { // Position near top-center
-        font: "24px Arial",
-        fill: "#ffff00", // Yellow text
-        backgroundColor: "#000000a0", // Semi-transparent black background
-        padding: { x: 15, y: 8 },
-        align: 'center'
-      })
-      .setOrigin(0.5)
-      .setDepth(200) // Ensure it's above most elements
-      .setScrollFactor(0); // Fix to camera
-
-    this.tempMessage = msg; // Store reference
-
-    // Automatically destroy the message after a delay
-    this.time.delayedCall(3000, () => { // 3 seconds duration
-        if (this.tempMessage === msg) { // Only destroy if it's still the current message
+    const msg = this.add.text(400, 100, text, { font: "24px Arial", fill: "#ffff00", backgroundColor: "#000000a0", padding: { x: 15, y: 8 }, align: 'center' })
+      .setOrigin(0.5).setDepth(200).setScrollFactor(0);
+    this.tempMessage = msg;
+    this.time.delayedCall(3000, () => {
+        if (this.tempMessage === msg) {
              msg.destroy();
              this.tempMessage = null;
         }
@@ -2078,7 +2215,7 @@ class MainGameScene extends Phaser.Scene {
   }
 
   shake(intensity = 0.005, duration = 100) {
-    this.cameras.main.shake(duration, intensity, false); // `false` for force parameter
+    this.cameras.main.shake(duration, intensity, false);
   }
 
   updateHearts() {
@@ -2086,67 +2223,50 @@ class MainGameScene extends Phaser.Scene {
     const fullHearts = Math.floor(this.player.health / 2);
     const halfHeart = this.player.health % 2 === 1;
 
-    // Iterate through the displayed heart sprites
     this.hearts.forEach((heartSprite, i) => {
       if (i < maxHearts) {
-        // This heart position corresponds to potential health
-        heartSprite.setVisible(true); // Make sure it's visible
-        if (i < fullHearts) {
-          heartSprite.setTexture("heart_full"); // Display a full heart
-        } else if (i === fullHearts && halfHeart) {
-          heartSprite.setTexture("heart_half"); // Display a half heart
-        } else {
-          heartSprite.setTexture("heart_empty"); // Display an empty heart container
-        }
+        heartSprite.setVisible(true);
+        if (i < fullHearts) heartSprite.setTexture("heart_full");
+        else if (i === fullHearts && halfHeart) heartSprite.setTexture("heart_half");
+        else heartSprite.setTexture("heart_empty");
       } else {
-        // This heart position is beyond the player's max health
-        heartSprite.setVisible(false); // Hide extra heart sprites
+        heartSprite.setVisible(false);
       }
     });
   }
 
   resetGame() {
-    // Reset player stats and upgrades
     this.coins = 0;
     this.damageMultiplier = 1;
     this.playerSpeed = 160;
     this.upgrades = { hp: 0, damage: 0, speed: 0, doubleShot: 0, splitShot: 0, dodge: 2 };
-    this.player.health = 6;
-    this.player.maxHealth = 6;
-
-    // Reset dodge system
+    if (this.player) {
+        this.player.health = 6;
+        this.player.maxHealth = 6;
+    }
     this.dodgeCount = 2;
     this.dodgeCooldowns = Array(this.upgrades.dodge).fill(null);
-
-    // Reset world progression
     this.currentWorld = 1;
-    this.hardMode = false; // Ensure hard mode is off on restart
-
-    // Reset room tracking
+    this.hardMode = false;
     this.clearedRooms = new Set();
     this.visitedRooms = {};
     this.roomActive = false;
     this.entryDoorDirection = null;
+    this.enemyPathData.clear(); // Clear path data
 
-    // Update UI immediately
     if (this.coinsText) this.coinsText.setText(`Coins: ${this.coins}`);
     if (this.worldText) this.worldText.setText(`World: ${this.currentWorld}`);
     if (this.hearts) this.updateHearts();
     if (this.powerupContainer) this.updatePowerupIcons();
-
-    // Note: World map regeneration and loading room 0,0 happens in create/loadRoom
   }
 
   transitionToRoom(x, y, direction) {
-    if (this.inTransition) return; // Prevent double transitions
+    if (this.inTransition) return;
     this.inTransition = true;
 
-    // Store the direction we came from for the next room's load logic
     const entryDirection = { 'up': 'down', 'down': 'up', 'left': 'right', 'right': 'left' }[direction];
-
-    // Calculate player's spawn position in the new room
     const { x1, y1, x2, y2 } = this.playArea;
-    const offset = 50; // How far from the edge the player spawns
+    const offset = 50;
     let newPlayerX = this.player.x;
     let newPlayerY = this.player.y;
 
@@ -2157,26 +2277,16 @@ class MainGameScene extends Phaser.Scene {
       case "right": newPlayerX = x1 + offset; break;
     }
 
-    // Fade out screen
     this.cameras.main.fade(250, 0, 0, 0, false, (camera, progress) => {
         if (progress === 1) {
-            // --- Actions after fade out ---
-            // Stop player movement during transition
             this.player.setVelocity(0, 0);
-
-            // Load the new room content (walls, enemies, doors etc.)
-            this.loadRoom(x, y, entryDirection); // Pass the entry direction
-
-            // Position the player in the new room
+            this.loadRoom(x, y, entryDirection);
             this.player.setPosition(newPlayerX, newPlayerY);
-
-            // --- Fade back in ---
-            this.cameras.main.fadeIn(250, 0, 0, 0);
-            // Optional: Short delay before allowing movement again
-            this.time.delayedCall(100, () => {
-                 this.inTransition = false; // Allow actions again slightly before fade completes
+            this.cameras.main.fadeIn(250, 0, 0, 0, (cam, prog) => {
+                if (prog === 1) {
+                     this.inTransition = false;
+                }
             });
-            // --- End Fade In ---
         }
     });
   }
@@ -2184,59 +2294,56 @@ class MainGameScene extends Phaser.Scene {
 
   updateMinimap() {
     if (!this.minimapObj) {
-      // Create minimap graphics object if it doesn't exist
-      this.minimapObj = this.add.graphics().setDepth(100).setScrollFactor(0); // Fix to camera
-      this.ui.add(this.minimapObj); // Add to UI container
+      this.minimapObj = this.add.graphics().setDepth(100).setScrollFactor(0);
+      this.ui.add(this.minimapObj);
     } else {
-      this.minimapObj.clear(); // Clear previous drawing
+      this.minimapObj.clear();
     }
 
-    // Minimap settings
-    const cellWidth = 10;
-    const cellHeight = 8;
-    const cellPadding = 2;
-    const mapOriginX = 650; // Top-right corner position
-    const mapOriginY = 50;
-    const visitedColor = 0xaaaaaa; // Grey for visited
-    const currentColor = 0x00ff00; // Green for current room
-    const bossColor = 0xff0000;    // Red for boss room (if known)
-    const shopColor = 0xffff00;    // Yellow for shop room (if known)
-    const unknownColor = 0x555555; // Dark grey for unseen adjacent rooms
+    const cellWidth = 10, cellHeight = 8, cellPadding = 2;
+    const mapOriginX = 650, mapOriginY = 50;
+    const visitedColor = 0xaaaaaa, currentColor = 0x00ff00;
+    const bossColor = 0xff0000, shopColor = 0xffff00, unknownColor = 0x555555;
 
-    // Find bounds of the discovered map to center it (optional, but nice)
-    let minX = 0, minY = 0, maxX = 0, maxY = 0;
+    let minX = 0, minY = 0; // Don't need max bounds here
     Object.keys(this.visitedRooms).forEach(key => {
         const [rx, ry] = key.split(",").map(Number);
-        minX = Math.min(minX, rx);
-        minY = Math.min(minY, ry);
-        maxX = Math.max(maxX, rx);
-        maxY = Math.max(maxY, ry);
+        minX = Math.min(minX, rx); minY = Math.min(minY, ry);
     });
+    // Also consider neighbors for bounds
+     Object.keys(this.visitedRooms).forEach(key => {
+         const roomData = this.roomMap[key];
+         if(roomData) {
+             Object.values(roomData.doors).forEach(neighborKey => {
+                 if (!this.visitedRooms[neighborKey]) {
+                     const [nx, ny] = neighborKey.split(",").map(Number);
+                     minX = Math.min(minX, nx); minY = Math.min(minY, ny);
+                 }
+             });
+         }
+     });
 
-    // Draw visited rooms and potential adjacent rooms
-    const drawnKeys = new Set(); // Keep track of what's drawn
+
+    const drawnKeys = new Set();
 
     Object.keys(this.visitedRooms).forEach(key => {
-        if (drawnKeys.has(key)) return; // Skip if already drawn (e.g., as adjacent)
+       if (drawnKeys.has(key) && key !== `${this.currentRoom.x},${this.currentRoom.y}`) return;
 
         const [rx, ry] = key.split(",").map(Number);
         const roomData = this.roomMap[key];
-        if (!roomData) return; // Skip if room data doesn't exist for some reason
+        if (!roomData) return;
 
-        // Calculate drawing position relative to map origin and bounds
         const drawX = mapOriginX + (rx - minX) * (cellWidth + cellPadding);
         const drawY = mapOriginY + (ry - minY) * (cellHeight + cellPadding);
 
-        // Determine fill color based on room type and status
-        let fillColor = visitedColor; // Default for visited
+        let fillColor = visitedColor;
         if (roomData.type === 'boss') fillColor = bossColor;
         if (roomData.type === 'shop') fillColor = shopColor;
         if (rx === this.currentRoom.x && ry === this.currentRoom.y) {
-            fillColor = currentColor; // Override for current room
+            fillColor = currentColor;
         }
 
-        // Draw the room rectangle
-        this.minimapObj.fillStyle(fillColor, 0.8); // Slightly transparent fill
+        this.minimapObj.fillStyle(fillColor, 0.8);
         this.minimapObj.fillRect(drawX, drawY, cellWidth, cellHeight);
         drawnKeys.add(key);
 
@@ -2249,20 +2356,42 @@ class MainGameScene extends Phaser.Scene {
 
                 this.minimapObj.fillStyle(unknownColor, 0.6);
                 this.minimapObj.fillRect(neighborDrawX, neighborDrawY, cellWidth, cellHeight);
-                drawnKeys.add(neighborKey); // Mark as drawn to avoid duplicates
+                drawnKeys.add(neighborKey);
             }
         });
     });
 
-     // Optional: Draw outline around the current room for extra emphasis
      const currentDrawX = mapOriginX + (this.currentRoom.x - minX) * (cellWidth + cellPadding);
      const currentDrawY = mapOriginY + (this.currentRoom.y - minY) * (cellHeight + cellPadding);
-     this.minimapObj.lineStyle(1, 0xffffff, 1); // White outline
+     this.minimapObj.lineStyle(1, 0xffffff, 1);
      this.minimapObj.strokeRect(currentDrawX - 1, currentDrawY - 1, cellWidth + 2, cellHeight + 2);
   }
 
   update(time, delta) {
-    if (!this.player.active || this.inTransition) return; // Do nothing if player is dead or transitioning
+    if (!this.player || !this.player.active || this.inTransition) return;
+
+    // --- Pathfinding Calculation ---
+    this.repathTimer -= delta;
+    if (this.repathTimer <= 0) {
+        this.repathTimer = 500; // Recalculate every 500ms
+        this.enemies.getChildren().forEach(enemy => {
+            if (enemy.active && enemy.type !== 'witch' && enemy.type !== 'boss') { // Exclude non-pathfinding types
+                 const distSq = Phaser.Math.Distance.Squared(this.player.x, this.player.y, enemy.x, enemy.y);
+                 // Only pathfind if enemy isn't doing a special action
+                 if (!enemy.isCharging && !enemy.isPreparingCharge && !(enemy.type === 'shapeshifter' && enemy.currentBehavior === 'flee') && !(enemy.type === 'wizard' && distSq < enemy.fleeDistance * enemy.fleeDistance) ) {
+                    this.findPathForEnemy(enemy);
+                 } else {
+                     this.enemyPathData.set(enemy.id, { path: null, targetNodeIndex: -1 }); // Clear path during special actions
+                 }
+            }
+        });
+    }
+    // Process pathfinding calculations (must be called each frame)
+    if (this.finder) {
+        this.finder.calculate();
+    }
+    // --- End Pathfinding ---
+
 
     // --- Player Movement ---
     if (!this.isDodging) {
@@ -2271,70 +2400,48 @@ class MainGameScene extends Phaser.Scene {
       let isMoving = false;
 
       if (this.isMobile) {
-        if (this.isTouching) {
-          // Calculate movement vector from joystick base to current touch
+        if (this.isTouching && this.touchIndicator && this.touchIndicator.visible) {
           const basePosX = this.touchIndicator.x;
           const basePosY = this.touchIndicator.y;
           let dx = this.touchPosition.x - basePosX;
           let dy = this.touchPosition.y - basePosY;
           const length = Math.sqrt(dx * dx + dy * dy);
-          const deadZone = 10; // Ignore small movements near center
+          const deadZone = 10;
 
           if (length > deadZone) {
-            // Normalize vector
-            dx /= length;
-            dy /= length;
+            dx /= length; dy /= length;
             targetVelocityX = dx * this.playerSpeed;
             targetVelocityY = dy * this.playerSpeed;
             isMoving = true;
           }
         }
-        // Hide joystick visuals if not touching
-        this.touchIndicator.setVisible(this.isTouching);
-        this.touchStick.setVisible(this.isTouching);
+        if (this.touchIndicator) this.touchIndicator.setVisible(this.isTouching);
+        if (this.touchStick) this.touchStick.setVisible(this.isTouching);
 
       } else { // Keyboard Movement
-        let dx = 0;
-        let dy = 0;
-        if (this.keys.W.isDown) dy = -1;
-        else if (this.keys.S.isDown) dy = 1;
-        if (this.keys.A.isDown) dx = -1;
-        else if (this.keys.D.isDown) dx = 1;
+        let dx = 0, dy = 0;
+        if (this.keys.W.isDown) dy = -1; else if (this.keys.S.isDown) dy = 1;
+        if (this.keys.A.isDown) dx = -1; else if (this.keys.D.isDown) dx = 1;
 
         if (dx !== 0 || dy !== 0) {
             isMoving = true;
-            // Normalize diagonal movement
-            if (dx !== 0 && dy !== 0) {
-                const length = Math.sqrt(2);
-                dx /= length;
-                dy /= length;
-            }
+            if (dx !== 0 && dy !== 0) { const length = Math.sqrt(2); dx /= length; dy /= length; }
             targetVelocityX = dx * this.playerSpeed;
             targetVelocityY = dy * this.playerSpeed;
         }
       }
-
-      // Apply velocity
       this.player.setVelocity(targetVelocityX, targetVelocityY);
-
-      // Play walking sound occasionally when moving
-      if (isMoving && time > this.footstepTimer + 300) {
-        this.sounds.walk.play();
-        this.footstepTimer = time;
-      }
-    } // End if (!isDodging)
+      if (isMoving && time > this.footstepTimer + 300) { this.sounds.walk.play(); this.footstepTimer = time; }
+    }
 
     // --- Player Shooting (Keyboard/Arrows) ---
     if (!this.isMobile && !this.isDodging) {
-        let shootDx = 0;
-        let shootDy = 0;
-        if (this.keys.LEFT.isDown) shootDx = -1;
-        else if (this.keys.RIGHT.isDown) shootDx = 1;
-        if (this.keys.UP.isDown) shootDy = -1;
-        else if (this.keys.DOWN.isDown) shootDy = 1;
+        let shootDx = 0, shootDy = 0;
+        if (this.keys.LEFT.isDown) shootDx = -1; else if (this.keys.RIGHT.isDown) shootDx = 1;
+        if (this.keys.UP.isDown) shootDy = -1; else if (this.keys.DOWN.isDown) shootDy = 1;
 
         if ((shootDx !== 0 || shootDy !== 0) && time > this.lastShootTime + this.shootCooldown) {
-            const angle = Math.atan2(shootDy, shootDx); // Calculate angle from direction vector
+            const angle = Math.atan2(shootDy, shootDx);
             this.fireProjectiles(angle);
             this.lastShootTime = time;
         }
@@ -2351,13 +2458,20 @@ class MainGameScene extends Phaser.Scene {
     });
 
     // --- Door Interaction ---
-    let nearDoor = false;
+    let nearDoor = false; // Is player near *any* door?
+    let onDoor = false; // Is player near the door the prompt is currently for?
     this.doors.getChildren().forEach(door => {
-        if (this.handleDoorInteraction(door)) {
-            nearDoor = true; // Set flag if interaction occurred (transition started)
+        const interactionResult = this.handleDoorInteraction(door);
+        if (interactionResult === true) { // Transition started
+            nearDoor = true;
+            onDoor = true;
+        } else if (interactionResult === false && this.doorPrompt.visible && Math.abs(this.doorPrompt.x - door.x) < 5) {
+            // Player is near this door (prompt is visible for it), but didn't transition
+            nearDoor = true; // Still near a door
+            onDoor = true;
         }
     });
-    // Hide desktop prompt if not near any door
+    // Hide desktop prompt only if not near *any* door that would show it
     if (!this.isMobile && !nearDoor && this.doorPrompt.visible) {
         this.doorPrompt.setVisible(false);
     }
@@ -2365,73 +2479,75 @@ class MainGameScene extends Phaser.Scene {
 
     // --- Dodge Cooldown and UI Update ---
     let dodgesRecovered = 0;
-    for (let i = 0; i < this.upgrades.dodge; i++) {
+    // Iterate backwards to safely remove nulls
+    for (let i = this.dodgeCooldowns.length - 1; i >= 0; i--) {
         if (this.dodgeCooldowns[i] !== null && time >= this.dodgeCooldowns[i]) {
-            this.dodgeCooldowns[i] = null; // Cooldown finished
+            this.dodgeCooldowns[i] = null; // Mark as finished
             dodgesRecovered++;
         }
     }
-    // Add recovered dodges back to count, capped by max dodges
+    // Clean up nulls from the array
+    this.dodgeCooldowns = this.dodgeCooldowns.filter(cd => cd !== null);
+
+    // Add recovered dodges back to count
     if (dodgesRecovered > 0) {
         this.dodgeCount = Math.min(this.upgrades.dodge, this.dodgeCount + dodgesRecovered);
     }
-    this.drawDodgeUI(time); // Update the visual dodge indicators
+    // Add null placeholders for cooldowns not yet started
+    while (this.dodgeCooldowns.length < this.upgrades.dodge - this.dodgeCount) {
+        this.dodgeCooldowns.push(null);
+    }
 
-    // --- Room Clear Check ---
-    // Moved inside onHitEnemy for more immediate response
+    this.drawDodgeUI(time);
 
   } // End update()
 
   drawDodgeUI(time) {
-    this.minimap.clear(); // Using 'minimap' graphics object for dodge UI
+    if (!this.minimap) return;
+    this.minimap.clear();
 
-    const uiX = 400; // Center X position for the UI
-    const uiY = 565; // Y position near the bottom
-    const radius = 15; // Radius of each dodge indicator circle
-    const gap = 40; // Gap between circles
-    const totalWidth = this.upgrades.dodge * radius * 2 + (this.upgrades.dodge - 1) * gap;
-    const startX = uiX - totalWidth / 2 + radius; // Calculate starting X for the first circle
+    const uiX = 400;
+    const uiY = 565;
+    const radius = 15;
+    const gap = 10;
+    const totalWidth = this.upgrades.dodge * radius * 2 + Math.max(0, this.upgrades.dodge - 1) * gap;
+    const startX = uiX - totalWidth / 2 + radius;
+
+    let cooldownIndex = 0; // Index into the filtered dodgeCooldowns array
 
     for (let i = 0; i < this.upgrades.dodge; i++) {
       const circleX = startX + i * (radius * 2 + gap);
 
-      // Draw outline for all slots
       this.minimap.lineStyle(2, 0xffffff, 1);
       this.minimap.strokeCircle(circleX, uiY, radius);
 
-      // Check if this dodge slot is available or on cooldown
       if (i < this.dodgeCount) {
-        // Available dodge: Fill with solid color
-        this.minimap.fillStyle(0x00ffff, 1); // Cyan for available
+        // Available dodge
+        this.minimap.fillStyle(0x00ffff, 1);
         this.minimap.fillCircle(circleX, uiY, radius);
       } else {
-        // On cooldown: Draw background and progress pie
-        const cooldownIndex = i - this.dodgeCount; // Index within the active cooldowns
+        // On cooldown
         const cooldownEndTime = this.dodgeCooldowns[cooldownIndex];
 
         if (cooldownEndTime && cooldownEndTime > time) {
-            // Draw background grey circle
-            this.minimap.fillStyle(0x555555, 0.8); // Dark grey background
+            this.minimap.fillStyle(0x555555, 0.8);
             this.minimap.fillCircle(circleX, uiY, radius);
 
-            // Calculate cooldown progress (0 to 1, where 1 is fully cooled down)
             const remainingTime = cooldownEndTime - time;
             const progress = 1 - Math.max(0, remainingTime / this.dodgeCooldownTime);
 
-            // Draw cooldown progress pie (starts from top, goes clockwise)
-            this.minimap.fillStyle(0x00ffff, 0.7); // Semi-transparent cyan for progress
-            this.minimap.slice(
-                circleX, uiY, radius,           // Position and radius
-                Phaser.Math.DegToRad(-90),      // Start angle (top)
-                Phaser.Math.DegToRad(-90 + progress * 360), // End angle based on progress
-                false                          // Draw clockwise
-            );
-            this.minimap.fillPath(); // Fill the slice path
-
+            if (progress > 0) {
+                this.minimap.fillStyle(0x00ffff, 0.7);
+                this.minimap.slice(circleX, uiY, radius, Phaser.Math.DegToRad(-90), Phaser.Math.DegToRad(-90 + progress * 360), false);
+                this.minimap.fillPath();
+            }
+            cooldownIndex++; // Move to the next active cooldown
         } else {
-             // Should be available if cooldown ended, but draw empty grey just in case state is weird
+             // Should not happen if logic is correct, but draw grey if it does
              this.minimap.fillStyle(0x555555, 0.8);
              this.minimap.fillCircle(circleX, uiY, radius);
+             // Increment cooldownIndex even if the cooldown seems finished but dodgeCount hasn't updated?
+             if (cooldownEndTime) cooldownIndex++;
         }
       }
     }
