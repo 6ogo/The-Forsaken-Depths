@@ -1185,18 +1185,29 @@ class TitleScene extends Phaser.Scene {
   
     // --- Room Layout ---
     createRoomLayout(key) {
+      // Draw background
+      if (this.background) this.background.destroy();
+      this.background = this.add.image(400, 300, "background").setDepth(-10);
       // Layout the room: walls, floor, and doors based on roomMap[key]
-      // Add outer walls
+      // Add outer walls (leave a gap for doors and at player spawn)
       const bounds = this.playArea || { x1: 60, y1: 60, x2: 740, y2: 540 };
       const { x1, y1, x2, y2 } = bounds;
-      // Top
-      this.walls.create(400, y1, "wall").setScale(10, 1).refreshBody();
-      // Bottom
-      this.walls.create(400, y2, "wall").setScale(10, 1).refreshBody();
-      // Left
-      this.walls.create(x1, 300, "wall").setScale(1, 10).refreshBody();
-      // Right
-      this.walls.create(x2, 300, "wall").setScale(1, 10).refreshBody();
+      // Top wall (leave gap for up door)
+      if (!this.roomMap[key].doors || !this.roomMap[key].doors.up) {
+        this.walls.create(400, y1, "wall").setScale(10, 1).refreshBody();
+      }
+      // Bottom wall (leave gap for down door)
+      if (!this.roomMap[key].doors || !this.roomMap[key].doors.down) {
+        this.walls.create(400, y2, "wall").setScale(10, 1).refreshBody();
+      }
+      // Left wall (leave gap for left door)
+      if (!this.roomMap[key].doors || !this.roomMap[key].doors.left) {
+        this.walls.create(x1, 300, "wall").setScale(1, 10).refreshBody();
+      }
+      // Right wall (leave gap for right door)
+      if (!this.roomMap[key].doors || !this.roomMap[key].doors.right) {
+        this.walls.create(x2, 300, "wall").setScale(1, 10).refreshBody();
+      }
       // Add doors if present
       const doors = this.roomMap[key].doors;
       if (doors && doors.up) this.doors.create(400, y1, "door").setDepth(2);
