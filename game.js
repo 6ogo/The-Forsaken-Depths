@@ -13,6 +13,10 @@ class TitleScene extends Phaser.Scene {
     this.load.audio('death', 'assets/sounds/death.wav');
     this.load.audio('upgrade', 'assets/sounds/upgrade.wav');
     this.load.audio('powerup', 'assets/sounds/powerup.wav');
+    this.load.audio('explosion', 'assets/sounds/explosion.mp3');
+    this.load.audio('shield_block', 'assets/sounds/shield_block.mp3');
+    this.load.audio('shield_regen', 'assets/sounds/shield_regen.mp3');
+
     // Load portal sprite sheet
     this.load.spritesheet('portal', 'assets/Dimensional_Portal.png', {
       frameWidth: 64,
