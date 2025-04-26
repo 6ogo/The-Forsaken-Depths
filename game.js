@@ -186,7 +186,7 @@ class MainGameScene extends Phaser.Scene {
     assets.forEach((key) => this.load.image(key, `assets/${key}.png`));
     this.load.image("wizard_projectile", "assets/wizard_projectile.png");
     this.load.image("witch_projectile", "assets/witch_projectile.png");
-    this.load.image("quasit_projectile", "assets/quail_projectile.png");
+    this.load.image("quasit_projectile", "assets/quasit_projectile.png.png");
     this.load.image("blob_projectile", "assets/blob_projectile.png");
     for (let i = 1; i <= 5; i++) { this.load.image(`wall${i}`, `assets/wall${i}.png`); }
     this.load.image("bg", "assets/bg.png");
