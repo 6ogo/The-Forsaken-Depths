@@ -1183,6 +1183,77 @@ class TitleScene extends Phaser.Scene {
       }
     }
   
+    // --- Map & Rooms ---
+    generateWorldMap() {
+      this.roomMap = {};
+      this.visitedRooms = {};
+      this.clearedRooms = new Set();
+      this.roomMap["0,0"] = { type: "start", doors: {}, depth: 0, variation: 0 };
+      let pos = { x: 0, y: 0 }, len = 0, exitKey = null;
+      while (len < 3 || (len < 8 && Math.random() < 0.7)) {
+        const dirs = Phaser.Utils.Array.Shuffle([
+          { dx: 0, dy: -1, dir: "up", opp: "down" },
+          { dx: 1, dy: 0, dir: "right", opp: "left" },
+          { dx: 0, dy: 1, dir: "down", opp: "up" },
+          { dx: -1, dy: 0, dir: "left", opp: "right" },
+        ]);
+        let moved = false;
+        for (const d of dirs) {
+          const nx = pos.x + d.dx, ny = pos.y + d.dy, key = `${nx},${ny}`;
+          if (!this.roomMap[key]) {
+            this.roomMap[key] = {
+              type: "normal",
+              doors: {},
+              depth: len + 1,
+              variation: Phaser.Math.Between(0, 2),
+            };
+            this.roomMap[`${pos.x},${pos.y}`].doors[d.dir] = key;
+            this.roomMap[key].doors[d.opp] = `${pos.x},${pos.y}`;
+            pos = { x: nx, y: ny };
+            len++;
+            exitKey = key;
+            moved = true;
+            break;
+          }
+        }
+        if (!moved) break;
+      }
+      if (exitKey) this.roomMap[exitKey].type = "boss";
+      const normals = Object.keys(this.roomMap).filter(
+        (k) => this.roomMap[k].type === "normal"
+      );
+      if (normals.length)
+        this.roomMap[Phaser.Utils.Array.GetRandom(normals)].type = "shop";
+      for (let i = 0; i < 3; i++) {
+        const keys = Object.keys(this.roomMap);
+        const base = Phaser.Utils.Array.GetRandom(keys);
+        const [bx, by] = base.split(",").map(Number);
+        const dirs = Phaser.Utils.Array.Shuffle([
+          { dx: 0, dy: -1, dir: "up", opp: "down" },
+          { dx: 1, dy: 0, dir: "right", opp: "left" },
+          { dx: 0, dy: 1, dir: "down", opp: "up" },
+          { dx: -1, dy: 0, dir: "left", opp: "right" },
+        ]);
+        for (const d of dirs) {
+          const nx = bx + d.dx, ny = by + d.dy, key = `${nx},${ny}`;
+          if (
+            !this.roomMap[key] &&
+            Object.keys(this.roomMap[base].doors).length < 3
+          ) {
+            this.roomMap[key] = {
+              type: "normal",
+              doors: {},
+              depth: this.roomMap[base].depth + 1,
+              variation: Phaser.Math.Between(0, 2),
+            };
+            this.roomMap[base].doors[d.dir] = key;
+            this.roomMap[key].doors[d.opp] = base;
+            break;
+          }
+        }
+      }
+    }
+
     // --- Room Layout ---
     createRoomLayout(key) {
       // Draw background
