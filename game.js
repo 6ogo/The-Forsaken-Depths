@@ -1118,9 +1118,10 @@ class MainGameScene extends Phaser.Scene {
     // --- Cleanup previous room ---
     if (this.shopIcons) {
       this.shopIcons.forEach((iconGroup) => {
-          iconGroup.sprite.destroy();
-          iconGroup.text.destroy();
-          iconGroup.desc.destroy();
+          // Add checks here too, just in case
+          if (iconGroup.sprite) iconGroup.sprite.destroy();
+          if (iconGroup.text) iconGroup.text.destroy();
+          if (iconGroup.desc) iconGroup.desc.destroy();
       });
       this.shopIcons = null;
     }
@@ -1131,10 +1132,21 @@ class MainGameScene extends Phaser.Scene {
     this.doors.clear(true, true); // Clear the doors group
     this.projectiles.clear(true, true);
     this.pickups.clear(true, true);
-    // Clear dynamic colliders from previous room
+
+    // Clear dynamic colliders from previous room - MODIFY THIS PART
     if (this.colliders) {
-        this.colliders.forEach(c => c.destroy());
-        this.colliders = [];
+        this.colliders.forEach(c => {
+            // *** ADD THIS CHECK ***
+            // Ensure 'c' exists and ideally check if it's still active in the physics world
+            // Using 'c.active' is a good check provided by Phaser for colliders
+            if (c && c.active) {
+                c.destroy();
+            }
+            // *********************
+        });
+        this.colliders = []; // Reset the array AFTER the loop
+    } else {
+        this.colliders = []; // Initialize if it doesn't exist
     }
     // Hide prompts
     this.doorPrompt.setVisible(false);
@@ -1160,6 +1172,7 @@ class MainGameScene extends Phaser.Scene {
 
     // Determine if the room should have active enemies
     const isCleared = this.clearedRooms.has(roomKey);
+    // Room is active if it's normal/boss AND not cleared
     this.roomActive = (currentRoomData.type === 'normal' || currentRoomData.type === 'boss') && !isCleared;
 
     // Create room layout (walls, background)
@@ -1190,13 +1203,13 @@ class MainGameScene extends Phaser.Scene {
     this.createDoors(currentRoomData);
 
     // Setup physics colliders for the new room layout and entities
+    // This will repopulate this.colliders
     this.setupColliders();
 
     // Update UI elements
     this.updateMinimap();
     this.updateHearts(); // Ensure hearts are correct after potential healing/max hp changes
   }
-
 
   createRoomLayout(key, roomData) {
     // Set background
