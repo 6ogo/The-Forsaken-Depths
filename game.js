@@ -579,7 +579,7 @@ class MainGameScene extends Phaser.Scene {
 
   // --- Core Update Loop ---
   update(time, delta) {
-    if (!this.player || !this.player.active || this.inTransition) return;
+    if (!this.player || this.inTransition) return;
 
     // --- Pathfinding Calculation ---
     this.repathTimer -= delta;
@@ -604,6 +604,10 @@ class MainGameScene extends Phaser.Scene {
       }
     }
 
+    // find the closest open door under our threshold
+    const threshold = 60;
+    let closestDoor = null;
+    let closestDist = threshold;
 
     // --- Player Logic ---
     this.handlePlayerMovement(time, delta);
@@ -617,7 +621,35 @@ class MainGameScene extends Phaser.Scene {
     });
 
     // --- Interactions ---
-    this.handleDoorInteraction();
+    this.doors.getChildren().forEach(door => {
+      if (!door.isOpen) return;              // only open doors
+      const d = Phaser.Math.Distance.Between(
+        this.player.x, this.player.y,
+        door.x, door.y
+      );
+      if (d < closestDist) {
+        closestDist = d;
+        closestDoor = door;
+      }
+    });
+
+    if (closestDoor) {
+      // show the prompt at that door
+      this.doorPrompt
+        .setText("[E] Enter")
+        .setPosition(closestDoor.x, closestDoor.y - 40)
+        .setVisible(true);
+
+      // if they actually hit E, transition just once
+      if (!this.isMobile && Phaser.Input.Keyboard.JustDown(this.keys.E)) {
+        const [nx, ny] = closestDoor.targetRoom.split(",").map(Number);
+        console.log(`→ moving to room ${nx},${ny}`);   // <— handy debug
+        this.transitionToRoom(nx, ny, closestDoor.direction);
+      }
+    } else {
+      // hide prompt if no door in range
+      this.doorPrompt.setVisible(false);
+    }
     // Shop interaction is handled by button clicks, not continuous check
 
     // --- UI Updates ---
@@ -3862,20 +3894,38 @@ class MainGameScene extends Phaser.Scene {
     });
   }
 
-  handleDoorInteraction() {
-    if (this.inTransition) return;
+  handleDoorInteraction(door) {
+    if (!door) return false;
+    const dist = Phaser.Math.Distance.Between(
+      this.player.x, this.player.y,
+      door.x, door.y
+    );
 
-    this.doors.getChildren().forEach(door => {
-      if (!door.active || !door.isOpen) return;
+    if (dist < 60) {
+      if (door.isOpen) {
+        // show the prompt
+        if (!this.isMobile) {
+          this.doorPrompt
+            .setText("[E] Enter")
+            .setPosition(door.x, door.y - 40)
+            .setVisible(true);
+        }
 
-      const dist = Phaser.Math.Distance.Between(this.player.x, this.player.y, door.x, door.y);
-      if (dist < 60) {
-        // Immediately enter
-        this.tryEnterDoor(door);
+        // only ENTER on key‐press — remove the automatic threshold check
+        if (!this.isMobile && Phaser.Input.Keyboard.JustDown(this.keys.E)) {
+          const [nx, ny] = door.targetRoom.split(",").map(Number);
+          this.transitionToRoom(nx, ny, door.direction);
+          return true;
+        }
+      } else if (!this.roomActive) {
+        this.openDoor(door);
       }
-    });
+      return false;
+    } else if (!this.isMobile && this.doorPrompt.visible) {
+      // hide prompt if you walk away
+      this.doorPrompt.setVisible(false);
+    }
   }
-
 
   isCrossingDoorThreshold(door) {
     if (!this.player || !this.player.body) return false;
@@ -4026,11 +4076,7 @@ class MainGameScene extends Phaser.Scene {
     // Call finder.calculate() periodically in the main update loop
     // This processes the pending pathfinding requests.
   }
-
-
-} // End MainGameScene Class
-
-
+}
 // --- Game Configuration ---
 var config = {
   type: Phaser.AUTO, // Use WebGL if available, otherwise Canvas
