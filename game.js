@@ -10,7 +10,12 @@ class TitleScene extends Phaser.Scene {
       // Handle fullscreen
       this.scale.startFullscreen();
       
-      this.add.image(400, 300, "background").setScale(2);
+      // Dynamically scale background to fill canvas
+      const bg = this.add.image(400, 300, "background").setOrigin(0.5);
+      const scaleX = this.sys.game.config.width / bg.width;
+      const scaleY = this.sys.game.config.height / bg.height;
+      const scale = Math.max(scaleX, scaleY);
+      bg.setScale(scale);
       this.add
         .text(400, 100, "The Forsaken Depths", {
           font: "48px Arial",
@@ -123,6 +128,7 @@ class TitleScene extends Phaser.Scene {
       this.load.image("wall3", "assets/wall3.png");
       this.load.image("wall4", "assets/wall4.png");
       this.load.image("wall5", "assets/wall5.png");
+      this.load.image("bg", "assets/bg.png");
       // New bosses and witch enemy
       this.load.image("boss1", "assets/boss1.png");
       this.load.image("boss2", "assets/boss2.png");
@@ -1256,11 +1262,11 @@ class TitleScene extends Phaser.Scene {
 
     // --- Room Layout ---
     createRoomLayout(key) {
-      // Draw background
+      // Draw background using bg.png and scale to cover the canvas
       if (this.background) this.background.destroy();
-      this.background = this.add.image(400, 300, "background").setDepth(-10);
+      this.background = this.add.image(400, 300, "bg").setDepth(-10);
+      this.background.setScale(1.5, 1.5); // Adjust scale as needed to cover canvas
       // Layout the room: walls, floor, and doors based on roomMap[key]
-      // Add outer walls (leave a gap for doors and at player spawn)
       const bounds = this.playArea || { x1: 60, y1: 60, x2: 740, y2: 540 };
       const { x1, y1, x2, y2 } = bounds;
       // Top wall (leave gap for up door)
@@ -1279,8 +1285,14 @@ class TitleScene extends Phaser.Scene {
       if (!this.roomMap[key].doors || !this.roomMap[key].doors.right) {
         this.walls.create(x2, 300, "wall").setScale(1, 10).refreshBody();
       }
-      // Add doors if present
-      const doors = this.roomMap[key].doors;
+      // Door creation is now handled by createDoors
+    }
+
+    // --- Door Creation ---
+    createDoors(room) {
+      const bounds = this.playArea || { x1: 60, y1: 60, x2: 740, y2: 540 };
+      const { x1, y1, x2, y2 } = bounds;
+      const doors = room.doors;
       if (doors && doors.up) this.doors.create(400, y1, "door").setDepth(2);
       if (doors && doors.down) this.doors.create(400, y2, "door").setDepth(2);
       if (doors && doors.left) this.doors.create(x1, 300, "door").setDepth(2);
