@@ -100,26 +100,9 @@ class GameOverScene extends Phaser.Scene {
       })
       .setOrigin(0.5);
 
-    // Continue Run button (hard mode)
-    const continueBtn = this.add
-      .text(400, 300, "Continue Run (Enemies are harder!)", {
-        font: "28px Arial",
-        fill: "#ffcc00",
-        backgroundColor: "#000000",
-        padding: { x: 20, y: 10 }
-      })
-      .setOrigin(0.5)
-      .setInteractive();
-
-    continueBtn.on("pointerdown", () => {
-      this.scene.start("MainGameScene", { continueRun: true });
-    });
-    continueBtn.on("pointerover", () => continueBtn.setStyle({ fill: "#ffffff" }));
-    continueBtn.on("pointerout", () => continueBtn.setStyle({ fill: "#ffcc00" }));
-
-    // Restart button
+    // Restart button (shifted up)
     const restartBtn = this.add
-      .text(400, 370, "Restart (Start from 0)", {
+      .text(400, 300, "Restart", { // Changed text and position
         font: "28px Arial",
         fill: "#00ff00",
         backgroundColor: "#000000",
@@ -129,14 +112,16 @@ class GameOverScene extends Phaser.Scene {
       .setInteractive();
 
     restartBtn.on("pointerdown", () => {
+      // Restart implies starting from 0, no need for extra flag?
+      // Let's keep the flag for clarity in MainGameScene's create
       this.scene.start("MainGameScene", { restart: true });
     });
     restartBtn.on("pointerover", () => restartBtn.setStyle({ fill: "#ffffff" }));
     restartBtn.on("pointerout", () => restartBtn.setStyle({ fill: "#00ff00" }));
 
-    // Exit button
+    // Exit button (shifted up)
     const exit = this.add
-      .text(400, 440, "Exit to Menu", {
+      .text(400, 370, "Exit to Menu", { // Changed position
         font: "28px Arial",
         fill: "#00ffff",
         backgroundColor: "#000000",
@@ -148,6 +133,9 @@ class GameOverScene extends Phaser.Scene {
     exit.on("pointerdown", () => this.scene.start("TitleScene"));
     exit.on("pointerover", () => exit.setStyle({ fill: "#ffffff" }));
     exit.on("pointerout", () => exit.setStyle({ fill: "#00ffff" }));
+
+    // Remove the "Continue Run" button entirely
+    // const continueBtn = this.add ... (code removed)
   }
 }
 // Main Game Scene
@@ -161,24 +149,25 @@ class MainGameScene extends Phaser.Scene {
     this.damageMultiplier = 1;
     this.playerSpeed = 160;
     this.dodgeSpeed = 400;
-    this.dodgeDuration = 300;
+    this.dodgeDuration = 300; // ms
     this.upgrades = {
       hp: 0,
       damage: 0,
       speed: 0,
       doubleShot: 0,
       splitShot: 0,
-      dodge: 2,
+      dodge: 2, // Start with 2 dodges
     };
-    this.shopPurchases = {};
+    this.shopPurchases = {}; // Track shop items if needed (currently not used)
     this.invincible = false;
     this.dodgeCount = 2;
-    this.dodgeCooldowns = [null, null];
-    this.lastDodgeUsed = 0;
+    this.dodgeCooldownTime = 4000; // 4 seconds cooldown per dodge
+    this.dodgeCooldowns = []; // Array to store cooldown end times
+    this.lastDodgeUsed = 0; // Index of the last used dodge slot
     this.isMobile = false;
     this.autoShootTimer = 0;
     this.powerupIcons = {};
-    this.hardMode = false;
+    this.hardMode = false; // Flag for harder run after continue
     this.footstepTimer = 0;
     this.worldEnemies = {
       1: ["blob", "bee", "witch"],
@@ -188,9 +177,10 @@ class MainGameScene extends Phaser.Scene {
       5: ["shapeshifter", "orc", "quasit"],
       6: ["witch", "bee", "orc"]
     };
-    this.roomActive = false;
-    this.clearedRooms = new Set();
-    this.visitedRooms = {};
+    this.roomActive = false; // Is the current room uncleared?
+    this.clearedRooms = new Set(); // Stores keys of cleared rooms ("x,y")
+    this.visitedRooms = {}; // Stores keys of visited rooms for minimap
+    this.entryDoorDirection = null; // Direction player entered from
   }
 
   preload() {
@@ -214,26 +204,28 @@ class MainGameScene extends Phaser.Scene {
 
     // Load powerup icons
     const powerupAssets = {
-      dodge_icon: "boss_projectile",
+      dodge_icon: "boss_projectile", // Placeholder, replace with actual icons
       damage_icon: "damage_up",
       hp_icon: "health_up",
-      speed_icon: "blob_projectile",
-      doubleshot_icon: "blob",
-      splitshot_icon: "blob_projectile"
+      speed_icon: "blob_projectile", // Placeholder
+      doubleshot_icon: "blob", // Placeholder
+      splitshot_icon: "blob_projectile" // Placeholder
     };
 
     Object.entries(powerupAssets).forEach(([key, value]) => {
       this.load.image(key, `assets/${value}.png`);
     });
 
-    // Load sounds
+    // Load sounds (already loaded in TitleScene, but good practice to ensure)
     const sounds = ['walk', 'dash', 'shot', 'death', 'upgrade', 'powerup'];
     sounds.forEach(sound => {
-      this.load.audio(sound, `assets/sounds/${sound}.wav`);
+      if (!this.sound.get(sound)) { // Only load if not already loaded
+        this.load.audio(sound, `assets/sounds/${sound}.wav`);
+      }
     });
 
     // Mobile controls
-    this.load.image("touchstick", "assets/wall.png");
+    this.load.image("touchstick", "assets/wall.png"); // Placeholder for touch stick base/knob
   }
 
   create(data) {
@@ -250,8 +242,9 @@ class MainGameScene extends Phaser.Scene {
     // Check platform
     this.isMobile = this.sys.game.device.os.android || this.sys.game.device.os.iOS;
 
-    // Setup game area
+    // Setup game area and world bounds
     this.playArea = { x1: 60, y1: 60, x2: 740, y2: 540 };
+    this.physics.world.setBounds(0, 0, this.sys.game.config.width, this.sys.game.config.height);
     this.inTransition = false;
 
     // Create physics groups
@@ -266,31 +259,32 @@ class MainGameScene extends Phaser.Scene {
     // Create UI - Now this comes AFTER input initialization
     this.createUI();
 
-    // Handle game mode
-    if (data?.continueRun) {
-      this.hardMode = true;
-      this.showTempMessage('Harder Run: Enemies have 50% more health!');
-    }
+    // Initialize dodge cooldowns array based on starting dodges
+    this.dodgeCooldowns = Array(this.upgrades.dodge).fill(null);
+
+    // Handle game mode (Restart / Continue - though continue is removed from GameOver)
     if (data?.restart) {
-      this.resetUpgrades();
-      this.coins = 0;
+      this.resetGame(); // Use a dedicated reset function
     }
+    // Note: Continue logic removed as per request
 
     // Generate world
     this.generateWorldMap();
-    this.loadRoom(0, 0);
+    this.loadRoom(0, 0); // Load starting room
 
-    // Create powerup icons
+    // Create powerup icons display
     this.createPowerupIcons();
+    this.updatePowerupIcons(); // Initial update
 
     // Initialize camera
-    this.cameras.main.setZoom(1.0);
+    this.cameras.main.setZoom(1.0); // Adjust zoom if needed
+    // this.cameras.main.startFollow(this.player); // Optional: Camera follows player
   }
 
   setupPhysicsGroups() {
     this.walls = this.physics.add.staticGroup();
     this.innerWalls = this.physics.add.staticGroup();
-    this.doors = this.physics.add.staticGroup();
+    this.doors = this.physics.add.group({ immovable: true }); // Use group for dynamic colliders
     this.enemies = this.physics.add.group();
     this.enemyProj = this.physics.add.group();
     this.projectiles = this.physics.add.group();
@@ -299,10 +293,11 @@ class MainGameScene extends Phaser.Scene {
 
   setupPlayer() {
     this.player = this.physics.add.sprite(400, 300, "player").setDepth(10);
+    this.player.setCollideWorldBounds(true); // Prevent going out of canvas
     this.player.health = 6;
     this.player.maxHealth = 6;
     this.player.lastDamageTime = 0;
-    this.shootCooldown = 200;
+    this.shootCooldown = 200; // ms between shots
     this.lastShootTime = 0;
     this.isDodging = false;
   }
@@ -315,34 +310,45 @@ class MainGameScene extends Phaser.Scene {
     if (this.isMobile) {
       this.setupMobileControls();
     } else {
-      this.input.on("pointerdown", (ptr) => this.shootMouse(ptr));
+      // Mouse shooting
+      this.input.on("pointerdown", (ptr) => {
+        // Prevent shooting if clicking UI elements (like shop items)
+        if (ptr.y < this.sys.game.config.height - 100) { // Basic check, adjust if UI layout changes
+             this.shootMouse(ptr);
+        }
+      });
     }
 
     // Minimap graphics for dodge UI
-    this.minimap = this.add.graphics().setDepth(100);
+    this.minimap = this.add.graphics().setDepth(100); // Used for dodge UI
   }
 
   takeDamage() {
-    if (this.invincible || this.time.now < this.player.lastDamageTime + 500) return;
+    // Ignore damage if invincible (dodge, post-hit) or recently hit
+    if (this.invincible || this.time.now < this.player.lastDamageTime + 800) return; // 800ms invincibility
 
     this.player.health -= 1;
     this.player.lastDamageTime = this.time.now;
 
-    // Visual feedback
+    // Visual feedback: Tint red
     this.player.setTint(0xff0000);
 
     // Flash effect
+    this.player.alpha = 0.5;
     this.time.addEvent({
-      delay: 100,
-      repeat: 7,
-      callback: () => {
-        this.player.alpha = this.player.alpha === 1 ? 0.5 : 1;
-      },
-      onComplete: () => {
-        this.player.alpha = 1;
-        if (this.player.active) this.player.clearTint();
-      }
+        delay: 100,
+        repeat: 3, // Flash 4 times (initial + 3 repeats)
+        callback: () => {
+            this.player.alpha = (this.player.alpha === 1) ? 0.5 : 1;
+        },
+        onComplete: () => {
+            if (this.player.active) {
+                this.player.alpha = 1;
+                this.player.clearTint();
+            }
+        }
     });
+
 
     // Screen shake
     this.shake(0.005, 200);
@@ -353,21 +359,24 @@ class MainGameScene extends Phaser.Scene {
       this.scene.start("GameOverScene");
     }
 
-    // Invincibility period
+    // Set temporary invincibility after getting hit
     this.invincible = true;
     this.time.delayedCall(800, () => {
-      this.invincible = false;
+        // Only remove invincibility if not currently dodging
+        if (!this.isDodging) {
+            this.invincible = false;
+        }
     });
   }
-  
+
   shootMouse(ptr) {
     if (this.time.now < this.lastShootTime + this.shootCooldown) return;
 
     const angle = Phaser.Math.Angle.Between(
       this.player.x,
       this.player.y,
-      ptr.x,
-      ptr.y
+      this.cameras.main.getWorldPoint(ptr.x, ptr.y).x, // Convert pointer coords to world coords
+      this.cameras.main.getWorldPoint(ptr.x, ptr.y).y
     );
 
     this.fireProjectiles(angle);
@@ -376,73 +385,107 @@ class MainGameScene extends Phaser.Scene {
 
   createBossProjectile(x, y, vx, vy) {
     const proj = this.enemyProj.create(x, y, 'boss_projectile');
+    if (!proj) return null; // Check if pool was exhausted or group destroyed
     proj.setVelocity(vx, vy);
     proj.setScale(1.5);
+    proj.body.onWorldBounds = true; // Ensure it checks world bounds
     return proj;
   }
 
   setupColliders() {
+    // Clear existing colliders before adding new ones (important for room transitions)
+    if (this.colliders) {
+        this.colliders.forEach(c => c.destroy());
+    }
+    this.colliders = [];
+
     // Wall collisions
-    this.physics.add.collider(this.player, this.walls);
-    this.physics.add.collider(this.enemies, this.walls);
-    this.physics.add.collider(this.player, this.innerWalls);
-    this.physics.add.collider(this.enemies, this.innerWalls);
+    this.colliders.push(this.physics.add.collider(this.player, this.walls));
+    this.colliders.push(this.physics.add.collider(this.enemies, this.walls));
+    this.colliders.push(this.physics.add.collider(this.player, this.innerWalls));
+    this.colliders.push(this.physics.add.collider(this.enemies, this.innerWalls));
 
-    // Projectiles
-    this.physics.add.collider(this.projectiles, this.walls, (proj) => proj.destroy());
-    this.physics.add.collider(this.enemyProj, this.walls, (proj) => proj.destroy());
+    // Projectiles vs Walls
+    this.colliders.push(this.physics.add.collider(this.projectiles, [this.walls, this.innerWalls], (proj) => proj.destroy()));
+    this.colliders.push(this.physics.add.collider(this.enemyProj, [this.walls, this.innerWalls], (proj) => proj.destroy()));
 
-    // Combat
-    this.physics.add.overlap(
+    // Combat Collisions
+    this.colliders.push(this.physics.add.overlap(
       this.projectiles,
       this.enemies,
       this.onHitEnemy,
       null,
       this
-    );
+    ));
 
-    this.physics.add.collider(
+    // Player vs Enemy (Collision Damage)
+    this.colliders.push(this.physics.add.collider(
       this.player,
       this.enemies,
       (player, enemy) => {
-        if (enemy.isCharging && !this.invincible) {
+        // Only take damage if enemy is actively harmful (e.g., charging or specific types)
+        if ((enemy.isCharging || enemy.type === 'bee') && !this.invincible) { // Example: Bees always hurt on touch
           this.takeDamage();
         }
       },
       null,
       this
-    );
+    ));
 
-    this.physics.add.overlap(
+    // Player vs Enemy Projectiles
+    this.colliders.push(this.physics.add.overlap(
       this.player,
       this.enemyProj,
-      () => {
-        if (!this.invincible) this.takeDamage();
+      (player, proj) => { // Pass projectile to handler
+         if (!this.invincible) {
+             this.takeDamage();
+             proj.destroy(); // Destroy projectile on hit
+         }
       },
       null,
       this
-    );
+    ));
 
     // Pickups
-    this.physics.add.overlap(
+    this.colliders.push(this.physics.add.overlap(
       this.player,
       this.pickups,
       this.onPickup,
       null,
       this
-    );
-  }
-  
-  createUI() {
-    this.ui = this.add.container(0, 0).setDepth(100);
+    ));
 
-    // Hearts
+    // Player vs Closed Doors
+    // This collider is added dynamically when doors are created/closed
+    this.doors.getChildren().forEach(door => {
+        if (!door.isOpen) {
+             door.collider = this.physics.add.collider(this.player, door);
+             this.colliders.push(door.collider);
+        }
+    });
+
+    // Physics world bounds collision for projectiles
+    this.physics.world.on('worldbounds', (body) => {
+        // Check if the body hitting the bounds is a projectile and destroy it
+        if (this.projectiles.contains(body.gameObject) || this.enemyProj.contains(body.gameObject)) {
+            body.gameObject.destroy();
+        }
+    });
+  }
+
+  createUI() {
+    // Use a container for UI elements if needed, especially for scaling or positioning
+    this.ui = this.add.container(0, 0).setDepth(100).setScrollFactor(0); // Set scroll factor 0 to fix UI position
+
+    // Hearts display
     this.hearts = [];
-    for (let i = 0; i < 3; i++) {
-      const h = this.add.image(100 + 48 * i, 60, "heart_full");
+    const maxHeartsToShow = 10; // Limit displayed hearts for sanity
+    for (let i = 0; i < maxHeartsToShow; i++) {
+      const h = this.add.image(100 + 48 * i, 60, "heart_empty"); // Start empty
       this.hearts.push(h);
       this.ui.add(h);
     }
+    this.updateHearts(); // Initial update based on player health
 
     // Status text
     this.coinsText = this.add.text(100, 100, "Coins: 0", {
@@ -457,10 +500,10 @@ class MainGameScene extends Phaser.Scene {
 
     this.ui.add([this.coinsText, this.worldText]);
 
-    // Create prompts
+    // Create prompts (door, shop)
     this.createPrompts();
 
-    // Level transition text
+    // Level transition text (initially hidden)
     this.nextLevelText = this.add
       .text(400, 250, "", {
         font: "32px Arial",
@@ -468,87 +511,105 @@ class MainGameScene extends Phaser.Scene {
         backgroundColor: "#000",
         padding: { x: 10, y: 5 },
       })
-      .setOrigin(0.5);
+      .setOrigin(0.5)
+      .setVisible(false);
+    this.ui.add(this.nextLevelText); // Add to UI container
   }
 
-  // Dodge functionality - Moved from incorrectly being inside createUI
   performDodge() {
     if (this.isDodging || this.dodgeCount <= 0) return;
 
+    // Find the next available dodge slot to put on cooldown
+    // This logic assumes cooldowns are tracked correctly elsewhere
+    // A simpler approach might be just decrementing count and starting one cooldown timer
+    // Let's use the simpler approach for now:
+    const availableSlotIndex = this.upgrades.dodge - this.dodgeCount; // Index of the dodge being used
+
     // Set states
     this.isDodging = true;
-    this.invincible = true;
-    this.player.setTint(0x00ffff);
+    this.invincible = true; // Invincible during dodge
+    this.player.setTint(0x00ffff); // Cyan tint during dodge
     this.dodgeCount--;
-    
-    // Play dash sound
+
     this.sounds.dash.play();
 
-    // Track which dodge was used
-    this.lastDodgeUsed = (this.upgrades.dodge - this.dodgeCount) - 1;
-    this.dodgeCooldowns[this.lastDodgeUsed] = this.time.now + 4000;
+    // Start cooldown for the used dodge slot
+    this.dodgeCooldowns[availableSlotIndex] = this.time.now + this.dodgeCooldownTime;
 
+    // --- Determine Dodge Direction ---
     let dx = 0, dy = 0;
+    let moveRequested = false;
 
     if (this.isMobile) {
       if (this.isTouching) {
-        const centerX = this.cameras.main.width / 4;
+        // Calculate direction from joystick center to touch position
+        const centerX = this.cameras.main.width / 4; // Center of left half
         const centerY = this.cameras.main.height / 2;
         dx = this.touchPosition.x - centerX;
         dy = this.touchPosition.y - centerY;
-
         const length = Math.sqrt(dx * dx + dy * dy);
-        if (length > 0) {
-          dx /= length;
-          dy /= length;
-        } else {
-          dy = -1;
+
+        if (length > 10) { // Only dodge if stick is moved significantly
+            dx /= length;
+            dy /= length;
+            moveRequested = true;
         }
-      } else {
-        dy = -1;
       }
-    } else {
-      if (this.keys.W.isDown) dy = -1;
-      else if (this.keys.S.isDown) dy = 1;
-
-      if (this.keys.A.isDown) dx = -1;
-      else if (this.keys.D.isDown) dx = 1;
-
-      if (dx === 0 && dy === 0) {
+      // If not touching or stick is centered, default dodge direction (e.g., forward)
+      if (!moveRequested) {
+        // Determine forward direction based on player sprite or last movement?
+        // For simplicity, let's default to dodging upwards if no direction is input
         dy = -1;
       }
 
+    } else { // Keyboard
+      if (this.keys.W.isDown) { dy = -1; moveRequested = true; }
+      else if (this.keys.S.isDown) { dy = 1; moveRequested = true; }
+
+      if (this.keys.A.isDown) { dx = -1; moveRequested = true; }
+      else if (this.keys.D.isDown) { dx = 1; moveRequested = true; }
+
+      // If no movement keys are pressed, default dodge direction (e.g., forward/up)
+      if (!moveRequested) {
+        dy = -1; // Default dodge up
+      }
+
+      // Normalize diagonal movement
       if (dx !== 0 && dy !== 0) {
         const length = Math.sqrt(dx * dx + dy * dy);
         dx /= length;
         dy /= length;
       }
     }
+    // --- End Dodge Direction ---
+
 
     this.player.setVelocity(dx * this.dodgeSpeed, dy * this.dodgeSpeed);
 
+    // End dodge after duration
     this.time.delayedCall(this.dodgeDuration, () => {
-      if (this.player.active) {
+      if (this.player.active) { // Check if player still exists
         this.isDodging = false;
-        if (!this.keys.W.isDown && !this.keys.A.isDown &&
-          !this.keys.S.isDown && !this.keys.D.isDown && !this.isTouching) {
-          this.player.setVelocity(0, 0);
-        }
-      }
-    });
-
-    this.time.delayedCall(this.dodgeDuration, () => {
-      this.invincible = false;
-      if (this.player.active) {
         this.player.clearTint();
+        // Stop movement ONLY if no movement keys are pressed AFTER the dodge ends
+        // This requires checking keys again here, or setting velocity based on current input
+        // Let's just stop velocity for simplicity, player needs to press keys again to move
+        this.player.setVelocity(0, 0);
+
+        // Check if player was hit during dodge; if so, invincibility remains for post-hit duration
+        // Otherwise, remove invincibility
+        if (this.time.now > this.player.lastDamageTime + 800) {
+             this.invincible = false;
+        }
       }
     });
   }
 
-  createPrompts() {
-    const promptY = this.isMobile ? 240 : 200;
 
-    // Door prompt
+  createPrompts() {
+    const promptY = this.isMobile ? 240 : 200; // Adjust Y position as needed
+
+    // Door prompt (for desktop 'E' key)
     this.doorPrompt = this.add
       .text(400, promptY, "", {
         font: "18px Arial",
@@ -560,16 +621,13 @@ class MainGameScene extends Phaser.Scene {
       .setDepth(101)
       .setVisible(false);
 
-    if (this.isMobile) {
-      this.doorPrompt.setInteractive();
-      this.doorPrompt.on('pointerdown', () => {
-        this.handleDoorInteraction();
-      });
-    }
+    // Mobile door interaction zone (invisible, covers door area)
+    // This might be better handled by checking distance in update loop
+    // Let's stick to distance check for mobile door interaction for now.
 
-    // Shop prompt
+    // Shop prompt (text displayed when near shop items)
     this.shopPrompt = this.add
-      .text(400, promptY + 40, "", {
+      .text(400, promptY + 40, "", { // Position below door prompt
         font: "18px Arial",
         fill: "#fff",
         backgroundColor: "#333",
@@ -579,148 +637,208 @@ class MainGameScene extends Phaser.Scene {
       .setDepth(101)
       .setVisible(false);
 
-    this.ui.add([this.doorPrompt, this.shopPrompt]);
+    this.ui.add([this.doorPrompt, this.shopPrompt]); // Add to UI container
   }
 
-  handleDoorInteraction() {
-    const doors = this.doors.getChildren();
-    for (const door of doors) {
-      const distance = Phaser.Math.Distance.Between(
+  handleDoorInteraction(door) {
+    // Called when player is near a door
+    const distance = Phaser.Math.Distance.Between(
         this.player.x, this.player.y, door.x, door.y
-      );
+    );
 
-      if (door.isOpen && this.isCrossing(door)) {
-        const [nx, ny] = door.targetRoom.split(",").map(Number);
-        this.transitionToRoom(nx, ny, door.direction);
-        break;
-      } else if (!door.isOpen && !this.roomActive && distance < 60) {
-        door.setTexture("door");
-        door.isOpen = true;
-        if (door.collider) {
-          this.physics.world.removeCollider(door.collider);
-          door.collider = null;
+    if (distance < 60) { // Interaction radius
+        if (door.isOpen) {
+            // Show prompt for desktop
+            if (!this.isMobile) {
+                this.doorPrompt.setText("[E] Enter")
+                    .setPosition(door.x, door.y - 40) // Position above door
+                    .setVisible(true);
+            }
+
+            // Check for interaction input (Key E or crossing threshold)
+            if ((!this.isMobile && this.keys.E.isDown) || this.isCrossingDoorThreshold(door)) {
+                 const [nx, ny] = door.targetRoom.split(",").map(Number);
+                 this.transitionToRoom(nx, ny, door.direction);
+                 return true; // Interaction happened
+            }
+        } else if (!this.roomActive) {
+             // Room is cleared, but this door was somehow missed? Open it.
+             // This case should ideally not happen if openAllDoors works correctly.
+             this.openDoor(door);
         }
-        break;
-      }
+    } else {
+        // Hide prompt if player moved away (only hide if it was for this door)
+        if (!this.isMobile && this.doorPrompt.visible && this.doorPrompt.x === door.x) {
+             this.doorPrompt.setVisible(false);
+        }
     }
+    return false; // No interaction happened
   }
+
+  isCrossingDoorThreshold(door) {
+      // Check if player center has moved past the door's threshold
+      const threshold = 10; // How far past the door center counts as crossing
+      switch (door.direction) {
+          case "up":    return this.player.y < door.y - threshold;
+          case "down":  return this.player.y > door.y + threshold;
+          case "left":  return this.player.x < door.x - threshold;
+          case "right": return this.player.x > door.x + threshold;
+      }
+      return false;
+  }
+
 
   setupMobileControls() {
-    // Left half for movement
+    // Left half for movement joystick
     this.leftHalf = this.add
       .zone(0, 0, this.cameras.main.width / 2, this.cameras.main.height)
       .setOrigin(0)
+      .setScrollFactor(0) // Fix zone to camera
       .setInteractive();
 
     // Touch position tracking
     this.touchPosition = { x: 0, y: 0 };
     this.isTouching = false;
+    this.touchId = -1; // Track the finger used for movement
 
     // Movement controls
     this.leftHalf.on('pointerdown', (pointer) => {
-      this.isTouching = true;
-      this.touchPosition.x = pointer.x;
-      this.touchPosition.y = pointer.y;
+        if (this.touchId === -1) { // Only track the first finger down on the left side
+            this.isTouching = true;
+            this.touchPosition.x = pointer.x;
+            this.touchPosition.y = pointer.y;
+            this.touchId = pointer.id;
+            this.touchIndicator.setPosition(pointer.x, pointer.y).setVisible(true); // Show base at initial touch
+            this.touchStick.setPosition(pointer.x, pointer.y).setVisible(true); // Show stick at initial touch
+        }
     });
 
-    this.leftHalf.on('pointermove', (pointer) => {
-      if (this.isTouching && pointer.isDown) {
-        this.touchPosition.x = pointer.x;
-        this.touchPosition.y = pointer.y;
-      }
+    this.input.on('pointermove', (pointer) => {
+        // Only move if the correct finger is moving on the left side
+        if (this.isTouching && pointer.id === this.touchId && pointer.x < this.cameras.main.width / 2) {
+            this.touchPosition.x = pointer.x;
+            this.touchPosition.y = pointer.y;
+
+            // Update stick position relative to base
+            const basePosX = this.touchIndicator.x;
+            const basePosY = this.touchIndicator.y;
+            let dx = pointer.x - basePosX;
+            let dy = pointer.y - basePosY;
+            const dist = Math.sqrt(dx*dx + dy*dy);
+            const maxDist = 40; // Max distance stick can move from base
+
+            if (dist > maxDist) {
+                dx *= maxDist / dist;
+                dy *= maxDist / dist;
+            }
+            this.touchStick.setPosition(basePosX + dx, basePosY + dy);
+
+        }
     });
 
-    this.leftHalf.on('pointerup', () => {
-      this.isTouching = false;
+    this.input.on('pointerup', (pointer) => {
+        // If the finger lifted is the one we were tracking for movement
+        if (pointer.id === this.touchId) {
+            this.isTouching = false;
+            this.touchId = -1;
+            this.touchIndicator.setVisible(false);
+            this.touchStick.setVisible(false);
+        }
     });
+
 
     // Right half for dodge
     this.rightHalf = this.add
       .zone(this.cameras.main.width / 2, 0, this.cameras.main.width / 2, this.cameras.main.height)
       .setOrigin(0)
+      .setScrollFactor(0) // Fix zone to camera
       .setInteractive();
 
-    this.rightHalf.on('pointerdown', () => {
-      if (this.dodgeCount > 0) {
-        this.performDodge();
-      }
+    this.rightHalf.on('pointerdown', (pointer) => {
+        // Ensure this touch isn't the movement touch spilling over
+        if (pointer.id !== this.touchId) {
+            if (this.dodgeCount > 0) {
+                this.performDodge();
+            }
+        }
     });
 
-    // Auto-shooting
-    this.time.addEvent({
-      delay: 500,
+    // Auto-shooting timer
+    this.autoShootTimerEvent = this.time.addEvent({ // Store reference to potentially pause/resume
+      delay: 500, // Time between auto-shots
       callback: this.autoShoot,
       callbackScope: this,
       loop: true
     });
 
-    // Touch indicators
+    // Touch indicators (visual feedback for joystick)
     this.touchIndicator = this.add
-      .circle(100, 450, 40, 0xffffff, 0.3)
+      .circle(100, 450, 40, 0xffffff, 0.3) // Base circle
       .setDepth(90)
+      .setScrollFactor(0)
       .setVisible(false);
 
     this.touchStick = this.add
-      .circle(100, 450, 20, 0xffffff, 0.7)
+      .circle(100, 450, 20, 0xffffff, 0.7) // Knob circle
       .setDepth(91)
+      .setScrollFactor(0)
       .setVisible(false);
   }
-  
+
   fireProjectiles(angle) {
-    const countSplit = this.upgrades.splitShot;
-    const spread = Math.PI / 12;
-    const angles = [];
+    const countSplit = this.upgrades.splitShot; // How many extra projectiles per side
+    const spreadAngle = Math.PI / 12; // Angle between split shots
+    const baseDamage = 10;
+    const finalDamage = baseDamage * this.damageMultiplier;
+    const projectileSpeed = 300;
 
-    // Calculate split angles
-    for (let i = 0; i <= countSplit; i++) {
-      const offset = (i - countSplit / 2) * spread;
-      angles.push(angle + offset);
-    }
+    const fireOneSet = (delay = 0) => {
+        this.time.delayedCall(delay, () => {
+            if (!this.player.active) return; // Don't fire if player is destroyed
 
-    // Handle double shots with delay
-    if (this.upgrades.doubleShot > 0) {
-      // First shot
-      angles.forEach((a) => {
-        const p = this.projectiles.create(
-          this.player.x,
-          this.player.y,
-          "projectile"
-        );
-        p.setVelocity(Math.cos(a) * 300, Math.sin(a) * 300);
-        p.damage = 10 * this.damageMultiplier;
-      });
+            // Center projectile
+            const pCenter = this.projectiles.create(this.player.x, this.player.y, "projectile");
+            pCenter.setVelocity(Math.cos(angle) * projectileSpeed, Math.sin(angle) * projectileSpeed);
+            pCenter.damage = finalDamage;
+            pCenter.body.onWorldBounds = true;
 
-      // Second shot with delay
-      this.time.delayedCall(100, () => {
-        angles.forEach((a) => {
-          const p = this.projectiles.create(
-            this.player.x,
-            this.player.y,
-            "projectile"
-          );
-          p.setVelocity(Math.cos(a) * 300, Math.sin(a) * 300);
-          p.damage = 10 * this.damageMultiplier;
+            // Split projectiles
+            for (let i = 1; i <= countSplit; i++) {
+                // Left side
+                const angleL = angle - i * spreadAngle;
+                const pL = this.projectiles.create(this.player.x, this.player.y, "projectile");
+                pL.setVelocity(Math.cos(angleL) * projectileSpeed, Math.sin(angleL) * projectileSpeed);
+                pL.damage = finalDamage;
+                pL.body.onWorldBounds = true;
+
+
+                // Right side
+                const angleR = angle + i * spreadAngle;
+                const pR = this.projectiles.create(this.player.x, this.player.y, "projectile");
+                pR.setVelocity(Math.cos(angleR) * projectileSpeed, Math.sin(angleR) * projectileSpeed);
+                pR.damage = finalDamage;
+                pR.body.onWorldBounds = true;
+            }
         });
-      });
-    } else {
-      // Single shot
-      angles.forEach((a) => {
-        const p = this.projectiles.create(
-          this.player.x,
-          this.player.y,
-          "projectile"
-        );
-        p.setVelocity(Math.cos(a) * 300, Math.sin(a) * 300);
-        p.damage = 10 * this.damageMultiplier;
-      });
+    };
+
+    // Fire the first set immediately
+    fireOneSet();
+
+    // If double shot is active, fire a second set after a short delay
+    if (this.upgrades.doubleShot > 0) {
+        // The second shot fires slightly later
+        fireOneSet(100); // 100ms delay for the second shot
     }
 
-    // Play shoot sound
     this.sounds.shot.play();
   }
 
+
   onBossDefeated() {
+    // Mark room as cleared BEFORE potentially transitioning
     this.clearedRooms.add(`${this.currentRoom.x},${this.currentRoom.y}`);
+    this.roomActive = false; // Ensure room is marked inactive
 
     // Play upgrade sound
     this.sounds.upgrade.play();
@@ -729,1192 +847,1610 @@ class MainGameScene extends Phaser.Scene {
       this.currentWorld++;
       this.worldText.setText(`World: ${this.currentWorld}`);
 
-      // Start the 5-second countdown
+      // Start the 5-second countdown visual
       this.nextLevelText.setText(`Going to next level in 5...`).setVisible(true);
-
-      // Create countdown
-      for (let i = 4; i >= 0; i--) {
-        this.time.delayedCall((5 - i) * 1000, () => {
-          if (i === 0) {
-            this.nextLevelText.setVisible(false);
-            this.generateWorldMap();
-            this.loadRoom(0, 0);
-          } else {
-            this.nextLevelText.setText(`Going to next level in ${i}...`);
+      let countdown = 5;
+      this.countdownEvent = this.time.addEvent({ // Store event to potentially cancel if needed
+          delay: 1000,
+          repeat: 4, // 5, 4, 3, 2, 1 (5 ticks total, 4 repeats)
+          callback: () => {
+              countdown--;
+              this.nextLevelText.setText(`Going to next level in ${countdown}...`);
+              if (countdown === 0) {
+                  this.nextLevelText.setVisible(false);
+                  this.generateWorldMap(); // Generate new layout
+                  this.entryDoorDirection = null; // Reset entry direction for new world
+                  this.loadRoom(0, 0); // Load the starting room of the new world
+              }
           }
-        });
-      }
-    } else {
-      // Victory screen
-      const victory = this.add
-        .text(400, 300, "Victory! You have conquered The Forsaken Depths!", {
-          font: "24px Arial",
-          fill: "#ffffff",
-          backgroundColor: "#000000",
-          padding: { x: 20, y: 10 }
-        })
-        .setOrigin(0.5)
-        .setDepth(200);
+      });
 
-      this.time.delayedCall(5000, () => {
-        this.scene.start("TitleScene");
+    } else {
+      // Victory Screen
+      this.cameras.main.fadeOut(1000, 0, 0, 0);
+      this.time.delayedCall(1000, () => {
+          // Display victory message (or transition to a dedicated Victory Scene)
+           const victory = this.add
+            .text(400, 300, "Victory! You have conquered The Forsaken Depths!", {
+              font: "24px Arial",
+              fill: "#ffffff",
+              backgroundColor: "#000000",
+              padding: { x: 20, y: 10 },
+              align: 'center',
+              wordWrap: { width: 600 }
+            })
+            .setOrigin(0.5)
+            .setDepth(200)
+            .setScrollFactor(0); // Fix to camera
+
+          this.time.delayedCall(5000, () => {
+            this.scene.start("TitleScene");
+          });
       });
     }
   }
-  
-  autoShoot() {
-    if (!this.player.active || this.time.now < this.lastShootTime + this.shootCooldown) return;
 
-    // Find closest enemy
-    let closest = null;
-    let minDist = 300; // Max range
+  autoShoot() {
+    // Only auto-shoot if mobile, player is active, and cooldown is ready
+    if (!this.isMobile || !this.player.active || this.time.now < this.lastShootTime + this.shootCooldown) return;
+
+    // Find the closest enemy within a certain range
+    let closestEnemy = null;
+    let minDistanceSq = 300 * 300; // Max auto-shoot range (squared for efficiency)
 
     this.enemies.getChildren().forEach(enemy => {
-      const dist = Phaser.Math.Distance.Between(
-        this.player.x, this.player.y, enemy.x, enemy.y
-      );
+        if (!enemy.active) return; // Skip inactive enemies
+        const distSq = Phaser.Math.Distance.Squared(this.player.x, this.player.y, enemy.x, enemy.y);
 
-      if (dist < minDist) {
-        minDist = dist;
-        closest = enemy;
-      }
+        if (distSq < minDistanceSq) {
+            minDistanceSq = distSq;
+            closestEnemy = enemy;
+        }
     });
 
-    // Shoot if enemy found
-    if (closest) {
-      const angle = Phaser.Math.Angle.Between(
-        this.player.x, this.player.y, closest.x, closest.y
-      );
-      this.fireProjectiles(angle);
-      this.lastShootTime = this.time.now;
+    // If an enemy is found in range, shoot at it
+    if (closestEnemy) {
+        const angle = Phaser.Math.Angle.Between(
+            this.player.x, this.player.y, closestEnemy.x, closestEnemy.y
+        );
+        this.fireProjectiles(angle);
+        this.lastShootTime = this.time.now; // Reset cooldown timer
     }
   }
 
   createPowerupIcons() {
+    // Text label for the powerup section
     this.powerupsText = this.add.text(100, 500, "Powerups:", {
       font: "20px Arial",
       fill: "#fff"
-    }).setDepth(101);
+    }).setDepth(101).setScrollFactor(0); // Fix to camera
 
-    this.ui.add(this.powerupsText);
+    this.ui.add(this.powerupsText); // Add to UI container
 
-    this.powerupContainer = this.add.container(100, 535).setDepth(101);
-    this.ui.add(this.powerupContainer);
+    // Container to hold the actual powerup icons
+    this.powerupContainer = this.add.container(100, 535).setDepth(101).setScrollFactor(0); // Position below text
+    this.ui.add(this.powerupContainer); // Add to UI container
   }
 
   updatePowerupIcons() {
-    this.powerupContainer.removeAll(true);
+    this.powerupContainer.removeAll(true); // Clear previous icons
 
     const iconConfigs = [
-      {
-        condition: this.damageMultiplier > 1,
-        count: Math.floor((this.damageMultiplier - 1) / 0.3),
+      { // Damage
+        count: this.upgrades.damage,
         icon: "damage_icon"
       },
-      {
-        condition: this.playerSpeed > 160,
-        count: Math.floor((this.playerSpeed - 160) / 20),
+      { // Speed
+        count: this.upgrades.speed,
         icon: "speed_icon"
       },
-      {
-        condition: this.player.maxHealth > 6,
-        count: Math.floor((this.player.maxHealth - 6) / 2),
+      { // HP (show based on upgrades, not current health)
+        count: this.upgrades.hp,
         icon: "hp_icon"
       },
-      {
-        condition: true,
+      { // Double Shot
         count: this.upgrades.doubleShot,
         icon: "doubleshot_icon"
       },
-      {
-        condition: true,
+      { // Split Shot
         count: this.upgrades.splitShot,
         icon: "splitshot_icon"
       }
+      // Note: Dodge count is handled by the dedicated dodge UI
     ];
 
     let xOffset = 0;
-    const gap = 40;
+    const iconSize = 32; // Assumed size of icons
+    const gap = 8; // Gap between icons
+    const maxIconsPerRow = 8; // How many icons before wrapping
+    let currentY = 0;
+    let iconsInRow = 0;
 
     iconConfigs.forEach(config => {
-      if (config.condition) {
+      if (config.count > 0) {
         for (let i = 0; i < config.count; i++) {
-          const icon = this.add.image(xOffset, 0, config.icon).setScale(0.8);
+          if (iconsInRow >= maxIconsPerRow) {
+              xOffset = 0;
+              currentY += iconSize + gap;
+              iconsInRow = 0;
+          }
+          const icon = this.add.image(xOffset, currentY, config.icon).setOrigin(0, 0).setScale(0.8); // Scale down slightly
           this.powerupContainer.add(icon);
-          xOffset += gap;
+          xOffset += (iconSize * 0.8) + gap; // Adjust offset based on scaled size
+          iconsInRow++;
         }
       }
     });
-
-    // Handle wrapping
-    if (xOffset > 300) {
-      this.powerupContainer.iterate((icon, index) => {
-        const row = Math.floor(index / 8);
-        const col = index % 8;
-        icon.setPosition(col * gap, row * gap);
-      });
-    }
   }
-  
+
   generateWorldMap() {
     this.roomMap = {};
-    this.visitedRooms = {};
-    this.clearedRooms = new Set();
+    this.visitedRooms = {}; // Reset visited status for the new world
+    this.clearedRooms = new Set(); // Reset cleared status for the new world
 
     // Create start room
     this.roomMap["0,0"] = {
-      type: "start",
+      type: "start", // Start room is always clear, no enemies
       doors: {},
       depth: 0,
-      variation: 0
+      variation: 0 // No variation for start room
     };
+    this.visitedRooms["0,0"] = true; // Mark start room as visited
 
-    let pos = { x: 0, y: 0 };
-    let len = 0;
-    let exitKey = null;
+    let currentPos = { x: 0, y: 0 };
+    let pathLength = 0;
+    const minPath = 3; // Minimum rooms in main path (excluding start)
+    const maxPath = 6; // Maximum rooms in main path
+    let bossRoomKey = null;
 
-    // Generate main path
-    while (len < 3 || (len < 8 && Math.random() < 0.7)) {
-      const dirs = Phaser.Utils.Array.Shuffle([
-        { dx: 0, dy: -1, dir: "up", opp: "down" },
-        { dx: 1, dy: 0, dir: "right", opp: "left" },
-        { dx: 0, dy: 1, dir: "down", opp: "up" },
-        { dx: -1, dy: 0, dir: "left", opp: "right" },
+    // Generate main path towards the boss
+    while (pathLength < maxPath) {
+      const possibleDirections = Phaser.Utils.Array.Shuffle([
+        { dx: 0, dy: -1, dir: "up", opp: "down" }, // Up
+        { dx: 1, dy: 0, dir: "right", opp: "left" }, // Right
+        { dx: 0, dy: 1, dir: "down", opp: "up" }, // Down
+        { dx: -1, dy: 0, dir: "left", opp: "right" }, // Left
       ]);
 
       let moved = false;
-      for (const d of dirs) {
-        const nx = pos.x + d.dx;
-        const ny = pos.y + d.dy;
-        const key = `${nx},${ny}`;
+      for (const move of possibleDirections) {
+        const nextX = currentPos.x + move.dx;
+        const nextY = currentPos.y + move.dy;
+        const nextKey = `${nextX},${nextY}`;
+        const currentKey = `${currentPos.x},${currentPos.y}`;
 
-        if (!this.roomMap[key]) {
-          this.roomMap[key] = {
-            type: "normal",
+        // Check if the next room position is already taken
+        if (!this.roomMap[nextKey]) {
+          // Create the new room
+          this.roomMap[nextKey] = {
+            type: "normal", // Default to normal, will be changed later if needed
             doors: {},
-            depth: len + 1,
-            variation: Phaser.Math.Between(0, 2),
+            depth: pathLength + 1,
+            variation: Phaser.Math.Between(1, 2), // Assign a random variation (1 or 2)
           };
 
-          this.roomMap[`${pos.x},${pos.y}`].doors[d.dir] = key;
-          this.roomMap[key].doors[d.opp] = `${pos.x},${pos.y}`;
-          pos = { x: nx, y: ny };
-          len++;
-          exitKey = key;
+          // Connect doors
+          this.roomMap[currentKey].doors[move.dir] = nextKey;
+          this.roomMap[nextKey].doors[move.opp] = currentKey;
+
+          // Move to the new room
+          currentPos = { x: nextX, y: nextY };
+          pathLength++;
+          bossRoomKey = nextKey; // Potential boss room is the last one added
           moved = true;
-          break;
+          break; // Exit loop after finding a valid direction
         }
       }
-      if (!moved) break;
+
+      // If no valid move was found from the current position, stop extending the path
+      if (!moved || pathLength >= maxPath) {
+          break;
+      }
     }
 
-    // Set boss room
-    if (exitKey) this.roomMap[exitKey].type = "boss";
+    // Ensure minimum path length
+    if (pathLength < minPath && bossRoomKey) {
+        // This scenario is less likely with the loop structure but handle defensively
+        // Could try extending again, or just accept a shorter path
+    }
 
-    // Add shop
-    const normals = Object.keys(this.roomMap).filter(
-      (k) => this.roomMap[k].type === "normal"
+    // Set the last room in the main path as the boss room
+    if (bossRoomKey) {
+      this.roomMap[bossRoomKey].type = "boss";
+    } else {
+        // Fallback if no path could be generated (shouldn't happen with start room)
+        // Maybe force a boss room adjacent to start?
+        this.roomMap["1,0"] = { type: "boss", doors: {"left": "0,0"}, depth: 1, variation: 0 };
+        this.roomMap["0,0"].doors["right"] = "1,0";
+    }
+
+
+    // Add a shop room (optional, could be guaranteed)
+    const normalRoomKeys = Object.keys(this.roomMap).filter(
+      (k) => k !== "0,0" && this.roomMap[k].type === "normal"
     );
-    if (normals.length) {
-      this.roomMap[Phaser.Utils.Array.GetRandom(normals)].type = "shop";
+    if (normalRoomKeys.length > 0) {
+      const shopKey = Phaser.Utils.Array.GetRandom(normalRoomKeys);
+      this.roomMap[shopKey].type = "shop";
     }
 
-    // Add branches
-    for (let i = 0; i < 3; i++) {
-      const keys = Object.keys(this.roomMap);
-      const base = Phaser.Utils.Array.GetRandom(keys);
-      const [bx, by] = base.split(",").map(Number);
+    // Add some side branches (optional)
+    const maxBranches = 2;
+    let branchesAdded = 0;
+    const potentialBranchStarts = Object.keys(this.roomMap).filter(k => k !== bossRoomKey); // Don't branch off boss
 
-      const dirs = Phaser.Utils.Array.Shuffle([
-        { dx: 0, dy: -1, dir: "up", opp: "down" },
-        { dx: 1, dy: 0, dir: "right", opp: "left" },
-        { dx: 0, dy: 1, dir: "down", opp: "up" },
-        { dx: -1, dy: 0, dir: "left", opp: "right" },
-      ]);
+    for (let i = 0; i < potentialBranchStarts.length && branchesAdded < maxBranches; i++) {
+        const baseKey = Phaser.Utils.Array.GetRandom(potentialBranchStarts);
+        const baseRoom = this.roomMap[baseKey];
+        // Only add branch if the room has space for more doors (less than 3 existing)
+        if (Object.keys(baseRoom.doors).length < 3) {
+            const [baseX, baseY] = baseKey.split(",").map(Number);
+            const possibleDirections = Phaser.Utils.Array.Shuffle([
+                { dx: 0, dy: -1, dir: "up", opp: "down" }, { dx: 1, dy: 0, dir: "right", opp: "left" },
+                { dx: 0, dy: 1, dir: "down", opp: "up" }, { dx: -1, dy: 0, dir: "left", opp: "right" },
+            ]);
 
-      for (const d of dirs) {
-        const nx = bx + d.dx;
-        const ny = by + d.dy;
-        const key = `${nx},${ny}`;
+            for (const move of possibleDirections) {
+                const nextX = baseX + move.dx;
+                const nextY = baseY + move.dy;
+                const nextKey = `${nextX},${nextY}`;
 
-        if (!this.roomMap[key] &&
-          Object.keys(this.roomMap[base].doors).length < 3) {
-          this.roomMap[key] = {
-            type: "normal",
-            doors: {},
-            depth: this.roomMap[base].depth + 1,
-            variation: Phaser.Math.Between(0, 2),
-          };
-          this.roomMap[base].doors[d.dir] = key;
-          this.roomMap[key].doors[d.opp] = base;
-          break;
+                // Check if room exists and if base room already has a door in this direction
+                if (!this.roomMap[nextKey] && !baseRoom.doors[move.dir]) {
+                    this.roomMap[nextKey] = {
+                        type: "normal", // Branch rooms are usually normal
+                        doors: {},
+                        depth: baseRoom.depth + 1,
+                        variation: Phaser.Math.Between(1, 2),
+                    };
+                    // Connect doors
+                    baseRoom.doors[move.dir] = nextKey;
+                    this.roomMap[nextKey].doors[move.opp] = baseKey;
+                    branchesAdded++;
+                    break; // Added one branch from this base room
+                }
+            }
         }
-      }
     }
   }
 
-  loadRoom(x, y) {
-    // Clear old room
+  loadRoom(x, y, entryDirection = null) {
+    // --- Cleanup previous room ---
     if (this.shopIcons) {
-      this.shopIcons.forEach((icon) => icon.sprite.destroy());
+      this.shopIcons.forEach((iconGroup) => {
+          iconGroup.sprite.destroy();
+          iconGroup.text.destroy();
+          iconGroup.desc.destroy();
+      });
       this.shopIcons = null;
     }
-
     this.enemies.clear(true, true);
     this.enemyProj.clear(true, true);
     this.innerWalls.clear(true, true);
     this.walls.clear(true, true);
-    this.doors.clear(true, true);
+    this.doors.clear(true, true); // Clear the doors group
     this.projectiles.clear(true, true);
     this.pickups.clear(true, true);
+    // Clear dynamic colliders from previous room
+    if (this.colliders) {
+        this.colliders.forEach(c => c.destroy());
+        this.colliders = [];
+    }
+    // Hide prompts
+    this.doorPrompt.setVisible(false);
+    this.shopPrompt.setVisible(false);
 
-    this.inTransition = false;
+
+    // --- Setup new room ---
+    this.inTransition = false; // Mark transition as complete
     this.currentRoom = { x, y };
+    this.entryDoorDirection = entryDirection; // Store how player entered
 
-    const key = `${x},${y}`;
-    this.roomMap[key].visited = true;
-    this.visitedRooms[key] = true;
-
-    // Create room layout
-    if (this.roomMap[key].type !== "shop") {
-      this.createRoomLayout(key);
+    const roomKey = `${x},${y}`;
+    if (!this.roomMap[roomKey]) {
+        console.error(`Room ${roomKey} not found in map!`);
+        // Fallback: Go back to start?
+        this.loadRoom(0, 0);
+        return;
     }
 
-    // Setup room based on type
-    switch (this.roomMap[key].type) {
+    const currentRoomData = this.roomMap[roomKey];
+    currentRoomData.visited = true; // Mark as visited for map generation logic (if needed)
+    this.visitedRooms[roomKey] = true; // Mark as visited for minimap display
+
+    // Determine if the room should have active enemies
+    const isCleared = this.clearedRooms.has(roomKey);
+    this.roomActive = (currentRoomData.type === 'normal' || currentRoomData.type === 'boss') && !isCleared;
+
+    // Create room layout (walls, background)
+    this.createRoomLayout(roomKey, currentRoomData);
+
+    // Spawn content based on room type and cleared status
+    switch (currentRoomData.type) {
       case "shop":
         this.createShopRoom();
+        this.roomActive = false; // Shops are never active/locked
         break;
       case "boss":
-        if (!this.clearedRooms.has(key)) this.createBossRoom();
+        if (!isCleared) {
+            this.createBossRoom();
+        }
         break;
       case "normal":
-        if (!this.clearedRooms.has(key)) this.createNormalRoom();
+        if (!isCleared) {
+            this.createNormalRoom();
+        }
+        break;
+      case "start":
+        this.roomActive = false; // Start room is never active
         break;
     }
 
-    this.createDoors(this.roomMap[key]);
+    // Create doors for the current room AFTER determining if room is active
+    this.createDoors(currentRoomData);
+
+    // Setup physics colliders for the new room layout and entities
     this.setupColliders();
-    this.roomActive = this.enemies.countActive() > 0;
+
+    // Update UI elements
     this.updateMinimap();
+    this.updateHearts(); // Ensure hearts are correct after potential healing/max hp changes
   }
 
-  createRoomLayout(key) {
+
+  createRoomLayout(key, roomData) {
     // Set background
     if (this.background) this.background.destroy();
+    // Choose background based on world?
     this.background = this.add.image(400, 300, "bg").setDepth(-10);
-    this.background.setScale(1.5);
+    this.background.setScale(Math.max(this.sys.game.config.width / this.background.width, this.sys.game.config.height / this.background.height)); // Scale to fit/fill
 
     const { x1, y1, x2, y2 } = this.playArea;
-    const wallType = `wall${this.currentWorld}`;
+    const wallTexture = `wall${this.currentWorld}`; // Use world-specific wall texture
 
-    // Base walls
-    if (!this.roomMap[key].doors?.up) {
-      this.walls.create(400, y1, wallType).setScale(10, 1).refreshBody();
+    // Create outer walls based on whether a door exists in that direction
+    // Top wall
+    if (!roomData.doors?.up) {
+      this.walls.create(400, y1 - 16, wallTexture).setOrigin(0.5, 0.5).setDisplaySize(x2 - x1 + 64, 32).refreshBody();
     }
-    if (!this.roomMap[key].doors?.down) {
-      this.walls.create(400, y2, wallType).setScale(10, 1).refreshBody();
+    // Bottom wall
+    if (!roomData.doors?.down) {
+      this.walls.create(400, y2 + 16, wallTexture).setOrigin(0.5, 0.5).setDisplaySize(x2 - x1 + 64, 32).refreshBody();
     }
-    if (!this.roomMap[key].doors?.left) {
-      this.walls.create(x1, 300, wallType).setScale(1, 10).refreshBody();
+    // Left wall
+    if (!roomData.doors?.left) {
+      this.walls.create(x1 - 16, 300, wallTexture).setOrigin(0.5, 0.5).setDisplaySize(32, y2 - y1 + 64).refreshBody();
     }
-    if (!this.roomMap[key].doors?.right) {
-      this.walls.create(x2, 300, wallType).setScale(1, 10).refreshBody();
+    // Right wall
+    if (!roomData.doors?.right) {
+      this.walls.create(x2 + 16, 300, wallTexture).setOrigin(0.5, 0.5).setDisplaySize(32, y2 - y1 + 64).refreshBody();
     }
 
-    // Add room variations
-    const variation = this.roomMap[key].variation;
+    // Add inner wall variations based on roomData.variation
+    const variation = roomData.variation;
+    const innerWallSize = 64; // Example size for inner blocks
     switch (variation) {
-      case 1:
-        // Cross pattern
-        this.innerWalls.create(400, 300, wallType)
-          .setScale(6, 0.5)
+      case 1: // Cross pattern
+        this.innerWalls.create(400, 300, wallTexture)
+          .setOrigin(0.5)
+          .setDisplaySize(innerWallSize * 4, innerWallSize * 0.5) // Horizontal bar
           .refreshBody();
-        this.innerWalls.create(400, 300, wallType)
-          .setScale(0.5, 6)
-          .refreshBody();
-        break;
-      case 2:
-        // Corner blocks
-        this.innerWalls.create(200, 200, wallType)
-          .setScale(2, 2)
-          .refreshBody();
-        this.innerWalls.create(600, 200, wallType)
-          .setScale(2, 2)
-          .refreshBody();
-        this.innerWalls.create(200, 400, wallType)
-          .setScale(2, 2)
-          .refreshBody();
-        this.innerWalls.create(600, 400, wallType)
-          .setScale(2, 2)
+        this.innerWalls.create(400, 300, wallTexture)
+          .setOrigin(0.5)
+          .setDisplaySize(innerWallSize * 0.5, innerWallSize * 4) // Vertical bar
           .refreshBody();
         break;
+      case 2: // Corner blocks
+        this.innerWalls.create(x1 + innerWallSize, y1 + innerWallSize, wallTexture)
+          .setOrigin(0.5)
+          .setDisplaySize(innerWallSize, innerWallSize)
+          .refreshBody();
+        this.innerWalls.create(x2 - innerWallSize, y1 + innerWallSize, wallTexture)
+          .setOrigin(0.5)
+          .setDisplaySize(innerWallSize, innerWallSize)
+          .refreshBody();
+        this.innerWalls.create(x1 + innerWallSize, y2 - innerWallSize, wallTexture)
+          .setOrigin(0.5)
+          .setDisplaySize(innerWallSize, innerWallSize)
+          .refreshBody();
+        this.innerWalls.create(x2 - innerWallSize, y2 - innerWallSize, wallTexture)
+          .setOrigin(0.5)
+          .setDisplaySize(innerWallSize, innerWallSize)
+          .refreshBody();
+        break;
+      // case 0 or default: No inner walls (start room, potentially others)
     }
   }
 
-  createDoors(room) {
+  createDoors(roomData) {
     const { x1, y1, x2, y2 } = this.playArea;
-    const doors = room.doors;
+    const doorsData = roomData.doors;
 
-    Object.entries(doors).forEach(([direction, targetRoom]) => {
-      let x = 400, y = 300;
+    Object.entries(doorsData).forEach(([direction, targetRoomKey]) => {
+      let doorX = 400, doorY = 300;
+      let doorTexture = "door"; // Default open texture
+
+      // Determine position based on direction
       switch (direction) {
-        case 'up': y = y1; break;
-        case 'down': y = y2; break;
-        case 'left': x = x1; break;
-        case 'right': x = x2; break;
+        case 'up':    doorY = y1; break;
+        case 'down':  doorY = y2; break;
+        case 'left':  doorX = x1; break;
+        case 'right': doorX = x2; break;
       }
 
-      const door = this.doors.create(x, y, "door").setDepth(2);
+      // Check if the door should be closed (if room is active)
+      const shouldBeClosed = this.roomActive;
+      if (shouldBeClosed) {
+          doorTexture = "door_closed";
+      }
+
+      // Create the door sprite and add it to the physics group
+      const door = this.doors.create(doorX, doorY, doorTexture).setDepth(1).setImmovable(true);
       door.direction = direction;
-      door.targetRoom = targetRoom;
-      door.isOpen = !this.roomActive;
+      door.targetRoom = targetRoomKey;
+      door.isOpen = !shouldBeClosed; // Set initial state
+      door.collider = null; // Placeholder for the player collider if closed
+
+      // If the door is closed, add a collider with the player
+      if (!door.isOpen) {
+          // Note: Collider is added in setupColliders to ensure it's managed correctly
+      }
     });
   }
 
+  openDoor(door) {
+      if (!door.isOpen) {
+          door.setTexture("door");
+          door.isOpen = true;
+          // Remove the specific collider between player and this door
+          if (door.collider) {
+              // Check if collider exists and is part of the physics world before removing
+              if (this.physics.world.colliders.getActive().includes(door.collider)) {
+                   door.collider.destroy(); // Use destroy() which removes it from the world
+              }
+              door.collider = null;
+          }
+      }
+  }
+
+  openAllDoors() {
+    this.doors.getChildren().forEach(door => {
+      this.openDoor(door);
+    });
+  }
+
+
   createNormalRoom() {
-    // Get enemies for current world
-    const possibleEnemies = this.worldEnemies[this.currentWorld];
-    const enemyCount = Phaser.Math.Between(3, 5);
+    // Get possible enemies for the current world
+    const possibleEnemies = this.worldEnemies[this.currentWorld] || ["blob"]; // Fallback to blob
+    const enemyCount = Phaser.Math.Between(3, 5); // Number of enemies to spawn
+
+    // Determine entry door position to avoid spawning enemies too close
+    let entryDoorPos = null;
+    const { x1, y1, x2, y2 } = this.playArea;
+    const safeSpawnDistanceSq = 150 * 150; // Squared distance check
+
+    if (this.entryDoorDirection) {
+        switch (this.entryDoorDirection) {
+            case 'up':    entryDoorPos = { x: 400, y: y1 }; break;
+            case 'down':  entryDoorPos = { x: 400, y: y2 }; break;
+            case 'left':  entryDoorPos = { x: x1, y: 300 }; break;
+            case 'right': entryDoorPos = { x: x2, y: 300 }; break;
+        }
+    }
 
     for (let i = 0; i < enemyCount; i++) {
       const enemyType = Phaser.Utils.Array.GetRandom(possibleEnemies);
-      const angle = (i / enemyCount) * Math.PI * 2;
-      const radius = 150;
-      const x = 400 + Math.cos(angle) * radius;
-      const y = 300 + Math.sin(angle) * radius;
+      let spawnX, spawnY, distSq;
+      let attempts = 0;
+      const maxAttempts = 10; // Prevent infinite loop
 
-      this.createEnemy(x, y, enemyType);
+      // Find a valid spawn position (not too close to entry door or center)
+      do {
+          // Generate random position within playable area, avoiding edges slightly
+          spawnX = Phaser.Math.Between(this.playArea.x1 + 50, this.playArea.x2 - 50);
+          spawnY = Phaser.Math.Between(this.playArea.y1 + 50, this.playArea.y2 - 50);
+
+          // Check distance from entry door if applicable
+          distSq = entryDoorPos ? Phaser.Math.Distance.Squared(spawnX, spawnY, entryDoorPos.x, entryDoorPos.y) : safeSpawnDistanceSq + 1;
+
+          attempts++;
+      } while (distSq < safeSpawnDistanceSq && attempts < maxAttempts);
+
+      // If we couldn't find a good spot after several attempts, spawn anyway
+      this.createEnemy(spawnX, spawnY, enemyType);
     }
+    this.roomActive = true; // Mark room as active
   }
 
   createEnemy(x, y, type) {
     const enemy = this.enemies.create(x, y, type);
+    if (!enemy || !enemy.body) return null; // Check if creation failed
 
-    // Base stats
+    // Base stats (customize per enemy type)
     const baseStats = {
-      blob: { health: 30, speed: 100, shootCooldown: 2000 },
-      wizard: { health: 40, speed: 80, shootCooldown: 1500 },
-      shapeshifter: { health: 50, speed: 120, shootCooldown: 2500 },
-      orc: { health: 60, speed: 90, shootCooldown: 0 },
-      bee: { health: 25, speed: 150, shootCooldown: 0 },
-      witch: { health: 45, speed: 85, shootCooldown: 1800 }
+      blob: { health: 30, speed: 80, shootCooldown: 2000, damage: 1 },
+      bee: { health: 25, speed: 150, shootCooldown: 0, damage: 1 }, // No shooting, contact damage
+      witch: { health: 45, speed: 0, shootCooldown: 3500, damage: 1, teleportDelay: 500, shootDelay: 500 }, // Stationary, relies on teleport/shoot
+      quasit: { health: 40, speed: 110, shootCooldown: 1800, damage: 1 },
+      orc: { health: 60, speed: 90, shootCooldown: 0, chargePrepareTime: 1000, chargeDuration: 500, chargeSpeed: 250, damage: 2 }, // Charging enemy
+      wizard: { health: 40, speed: 70, shootCooldown: 1500, damage: 1, fleeDistance: 150, engageDistance: 250 }, // Kiting enemy
+      shapeshifter: { health: 50, speed: 120, shootCooldown: 2500, damage: 1, behaviorChangeTime: 3000 }, // Changes behavior
     };
 
-    const stats = baseStats[type];
+    const stats = baseStats[type] || baseStats.blob; // Default to blob stats if type unknown
 
-    enemy.health = this.hardMode ?
-      Math.ceil(stats.health * 1.5) :
-      stats.health;
+    // Apply stats
+    enemy.health = this.hardMode ? Math.ceil(stats.health * 1.5) : stats.health;
+    enemy.maxHealth = enemy.health; // Store max health if needed for UI/logic
     enemy.speed = stats.speed;
     enemy.type = type;
     enemy.shootCooldown = stats.shootCooldown;
-    enemy.lastShootTime = 0;
+    enemy.lastShootTime = this.time.now + Phaser.Math.Between(0, stats.shootCooldown / 2); // Stagger initial shots
+    enemy.damage = stats.damage; // Damage dealt (e.g., on contact or projectile)
+
+    // Type-specific properties
     enemy.isPreparingCharge = false;
     enemy.isCharging = false;
+    enemy.chargePrepareTime = stats.chargePrepareTime;
+    enemy.chargeDuration = stats.chargeDuration;
+    enemy.chargeSpeed = stats.chargeSpeed;
+    enemy.lastChargeAttempt = 0;
+    enemy.chargeCooldown = 4000; // Cooldown between charge attempts for Orc
+
+    enemy.fleeDistance = stats.fleeDistance;
+    enemy.engageDistance = stats.engageDistance;
+
+    enemy.behaviorTimer = 0;
+    enemy.behaviorChangeTime = stats.behaviorChangeTime;
+    enemy.currentBehavior = 'chase'; // Default behavior for shapeshifter
+
+    enemy.isTeleporting = false; // For Witch
+    enemy.teleportDelay = stats.teleportDelay;
+    enemy.shootDelay = stats.shootDelay; // Delay between teleport and shoot for Witch
+
+    // Ensure enemy collides with walls
+    enemy.setCollideWorldBounds(true); // Collide with canvas edges too
 
     return enemy;
   }
-  
-  updateEnemy(enemy, time) {
-    if (enemy.isPreparingCharge || enemy.isCharging) {
-      this.processChargingState(enemy, time);
-      return;
-    }
+
+  updateEnemy(enemy, time, delta) {
+    if (!enemy.active || !this.player.active) return; // Skip if enemy or player is inactive
 
     const dx = this.player.x - enemy.x;
     const dy = this.player.y - enemy.y;
-    const dist = Math.hypot(dx, dy) || 1;
+    const distSq = dx * dx + dy * dy; // Use squared distance for comparisons
+    const dist = Math.sqrt(distSq);
 
+    // Common behavior: Stop if too close (unless charging/specific type)
+    const stopDistanceSq = 50 * 50; // Squared stop distance
+
+    // --- Type-Specific Logic ---
     switch (enemy.type) {
       case "boss":
-        // Handle boss behavior
         if (enemy.updateAttack) {
-          enemy.updateAttack(time);
+          enemy.updateAttack(time); // Bosses have custom attack logic
         }
-        break;
-
-      case "wizard":
-        // Keep distance and shoot
-        if (dist < 150) {
-          enemy.setVelocity((-dx / dist) * enemy.speed, (-dy / dist) * enemy.speed);
-        } else if (dist > 250) {
-          enemy.setVelocity((dx / dist) * enemy.speed * 0.5, (dy / dist) * enemy.speed * 0.5);
+        // Basic boss movement (can be overridden in specific boss logic)
+        if (dist > 100) { // Keep some distance
+             this.physics.moveToObject(enemy, this.player, enemy.speed * 0.5);
         } else {
-          enemy.setVelocity(0, 0);
-        }
-
-        if (time > enemy.lastShootTime + enemy.shootCooldown) {
-          this.shootEnemyProjectile(enemy);
-          enemy.lastShootTime = time;
+             enemy.setVelocity(0, 0);
         }
         break;
 
       case "witch":
-        // Teleport and shoot
-        if (time > enemy.lastShootTime + enemy.shootCooldown) {
-          if (Math.random() < 0.3) {
-            const angle = Math.random() * Math.PI * 2;
-            const radius = Phaser.Math.Between(100, 200);
-            enemy.x = this.player.x + Math.cos(angle) * radius;
-            enemy.y = this.player.y + Math.sin(angle) * radius;
-          }
-          this.shootEnemyProjectile(enemy);
-          enemy.lastShootTime = time;
+        enemy.setVelocity(0, 0); // Witches don't move normally
+        if (!enemy.isTeleporting && time > enemy.lastShootTime + enemy.shootCooldown) {
+            enemy.isTeleporting = true;
+            enemy.lastShootTime = time; // Reset timer immediately
+
+            // 1. Shake effect
+            this.tweens.add({
+                targets: enemy,
+                scaleX: 1.1,
+                scaleY: 0.9,
+                duration: 50,
+                yoyo: true,
+                repeat: 4, // ~400ms shake
+                onComplete: () => {
+                    if (!enemy.active) return; // Check if still active
+                    enemy.setScale(1); // Reset scale
+
+                    // 2. Teleport after shake (with delay)
+                    this.time.delayedCall(enemy.teleportDelay, () => {
+                        if (!enemy.active) return;
+
+                        // Find a valid teleport spot (simple random for now)
+                        // TODO: Add checks to prevent teleporting into walls?
+                        const angle = Math.random() * Math.PI * 2;
+                        const radius = Phaser.Math.Between(100, 200);
+                        const targetX = this.player.x + Math.cos(angle) * radius;
+                        const targetY = this.player.y + Math.sin(angle) * radius;
+
+                        // Clamp position to play area bounds
+                        enemy.x = Phaser.Math.Clamp(targetX, this.playArea.x1, this.playArea.x2);
+                        enemy.y = Phaser.Math.Clamp(targetY, this.playArea.y1, this.playArea.y2);
+
+                        // Visual feedback for teleport (optional)
+                        enemy.alpha = 0.5;
+                        this.time.delayedCall(100, () => { if(enemy.active) enemy.alpha = 1; });
+
+                        // 3. Shoot after teleport (with delay)
+                        this.time.delayedCall(enemy.shootDelay, () => {
+                            if (enemy.active && this.player.active) {
+                                this.shootEnemyProjectile(enemy, this.player.x, this.player.y);
+                            }
+                            // 4. End teleport sequence
+                            enemy.isTeleporting = false;
+                        });
+                    });
+                }
+            });
+        }
+        break;
+
+      case "wizard": // Kiting behavior
+        if (distSq < enemy.fleeDistance * enemy.fleeDistance) {
+            // Too close, move away
+            enemy.setVelocity((-dx / dist) * enemy.speed, (-dy / dist) * enemy.speed);
+        } else if (distSq > enemy.engageDistance * enemy.engageDistance) {
+            // Too far, move closer slowly
+            enemy.setVelocity((dx / dist) * enemy.speed * 0.5, (dy / dist) * enemy.speed * 0.5);
+        } else {
+            // In range, stop moving and shoot
+            enemy.setVelocity(0, 0);
+            if (time > enemy.lastShootTime + enemy.shootCooldown) {
+                this.shootEnemyProjectile(enemy, this.player.x, this.player.y);
+                enemy.lastShootTime = time;
+            }
+        }
+        break;
+
+      case "orc": // Charging behavior
+        if (enemy.isCharging || enemy.isPreparingCharge) {
+            // Handle charging state
+            this.processChargingState(enemy, time);
+        } else if (distSq < 150 * 150 && time > enemy.lastChargeAttempt + enemy.chargeCooldown) { // Range to start charge
+            // Start charge preparation
+            enemy.isPreparingCharge = true;
+            enemy.chargeStartTime = time;
+            enemy.lastChargeAttempt = time; // Start cooldown now
+            enemy.setVelocity(0, 0); // Stop moving during prep
+            enemy.setTint(0xffff00); // Yellow tint during prep
+        } else {
+            // Normal chase behavior when not charging/preparing
+            if (distSq > stopDistanceSq) {
+                 this.physics.moveToObject(enemy, this.player, enemy.speed);
+            } else {
+                 enemy.setVelocity(0, 0);
+            }
         }
         break;
 
       case "shapeshifter":
-        // Random behaviors
-        if (!enemy.behaviorTimer || time > enemy.behaviorTimer) {
-          enemy.behavior = Phaser.Math.Between(0, 2);
-          enemy.behaviorTimer = time + 3000;
+        if (time > enemy.behaviorTimer) {
+            // Change behavior periodically
+            const behaviors = ['chase', 'flee', 'shoot', 'circle'];
+            enemy.currentBehavior = Phaser.Utils.Array.GetRandom(behaviors);
+            enemy.behaviorTimer = time + enemy.behaviorChangeTime;
+            // Reset state for new behavior if needed
+            enemy.setVelocity(0,0);
         }
 
-        switch (enemy.behavior) {
-          case 0: // Chase
-            enemy.setVelocity((dx / dist) * enemy.speed, (dy / dist) * enemy.speed);
-            break;
-          case 1: // Circle
-            const angle = time * 0.003;
-            enemy.setVelocity(
-              Math.cos(angle) * enemy.speed,
-              Math.sin(angle) * enemy.speed
-            );
-            break;
-          case 2: // Shoot
-            enemy.setVelocity(0, 0);
-            if (time > enemy.lastShootTime + enemy.shootCooldown) {
-              this.shootEnemyProjectile(enemy);
-              enemy.lastShootTime = time;
-            }
-            break;
+        // Execute current behavior
+        switch (enemy.currentBehavior) {
+            case 'chase':
+                if (distSq > stopDistanceSq) this.physics.moveToObject(enemy, this.player, enemy.speed);
+                else enemy.setVelocity(0, 0);
+                break;
+            case 'flee':
+                if (distSq < 300 * 300) enemy.setVelocity((-dx / dist) * enemy.speed, (-dy / dist) * enemy.speed);
+                else enemy.setVelocity(0, 0); // Stop fleeing if far enough
+                break;
+            case 'shoot':
+                enemy.setVelocity(0, 0); // Stand still to shoot
+                if (time > enemy.lastShootTime + enemy.shootCooldown) {
+                    this.shootEnemyProjectile(enemy, this.player.x, this.player.y);
+                    enemy.lastShootTime = time;
+                }
+                break;
+            case 'circle':
+                 // Simple circling logic (adjust radius and speed)
+                 const circleSpeed = enemy.speed * 0.8;
+                 const angleOffset = Math.PI / 2; // Perpendicular offset
+                 const targetAngle = Math.atan2(dy, dx);
+                 const circleAngle = targetAngle + angleOffset;
+                 enemy.setVelocity(Math.cos(circleAngle) * circleSpeed, Math.sin(circleAngle) * circleSpeed);
+                break;
         }
         break;
 
+      case "bee": // Simple aggressive chase
+         this.physics.moveToObject(enemy, this.player, enemy.speed);
+         break;
+
+      case "blob": // Basic chase and shoot
       default:
-        // Basic chase and shoot behavior
-        enemy.setVelocity((dx / dist) * enemy.speed, (dy / dist) * enemy.speed);
+        if (distSq > stopDistanceSq) {
+           this.physics.moveToObject(enemy, this.player, enemy.speed);
+        } else {
+           enemy.setVelocity(0, 0);
+        }
+        // Shoot if cooldown ready
         if (enemy.shootCooldown && time > enemy.lastShootTime + enemy.shootCooldown) {
-          this.shootEnemyProjectile(enemy);
+          this.shootEnemyProjectile(enemy, this.player.x, this.player.y);
           enemy.lastShootTime = time;
         }
+        break;
     }
   }
 
+
   createBossRoom() {
     const bossTypes = {
-      1: {
-        sprite: 'boss1',
-        health: 200,
-        speed: 80,
-        pattern: 'circle',
-        attackDelay: 2000,
-        projectileSpeed: 150
-      },
-      2: {
-        sprite: 'boss2',
-        health: 250,
-        speed: 90,
-        pattern: 'charge',
-        attackDelay: 2500,
-        projectileSpeed: 180
-      },
-      3: {
-        sprite: 'boss3',
-        health: 300,
-        speed: 100,
-        pattern: 'split',
-        attackDelay: 3000,
-        projectileSpeed: 200
-      },
-      4: {
-        sprite: 'boss4',
-        health: 350,
-        speed: 110,
-        pattern: 'spiral',
-        attackDelay: 2800,
-        projectileSpeed: 220
-      },
-      5: {
-        sprite: 'boss5',
-        health: 400,
-        speed: 120,
-        pattern: 'waves',
-        attackDelay: 2600,
-        projectileSpeed: 240
-      }
+      1: { sprite: 'boss1', health: 200, speed: 80, pattern: 'circle', attackDelay: 2000, projectileSpeed: 150 },
+      2: { sprite: 'boss2', health: 250, speed: 90, pattern: 'charge', attackDelay: 2500, projectileSpeed: 180, chargePrepareTime: 1000, chargeDuration: 600, chargeSpeed: 300 },
+      3: { sprite: 'boss3', health: 300, speed: 100, pattern: 'split', attackDelay: 3000, projectileSpeed: 200, splitDelay: 800 },
+      4: { sprite: 'boss4', health: 350, speed: 110, pattern: 'spiral', attackDelay: 1500, projectileSpeed: 220, spiralCount: 5 }, // Faster attacks
+      5: { sprite: 'boss5', health: 400, speed: 120, pattern: 'waves', attackDelay: 2600, projectileSpeed: 240, waveCount: 5, waveSpread: Math.PI / 3 },
+      6: { sprite: 'boss', health: 500, speed: 100, pattern: 'combo', attackDelay: 3500, projectileSpeed: 210 } // Example final boss
     };
 
-    const bossConfig = bossTypes[this.currentWorld];
-    const boss = this.enemies.create(400, 300, bossConfig.sprite);
-    boss.setScale(2);
+    const bossConfig = bossTypes[this.currentWorld] || bossTypes[1]; // Default to world 1 boss if config missing
+    const boss = this.enemies.create(400, 150, bossConfig.sprite); // Spawn near top center
+    if (!boss || !boss.body) return; // Creation check
+
+    boss.setScale(2); // Bosses are larger
     boss.health = this.hardMode ? Math.ceil(bossConfig.health * 1.5) : bossConfig.health;
+    boss.maxHealth = boss.health;
     boss.speed = bossConfig.speed;
-    boss.type = 'boss';
+    boss.type = 'boss'; // Critical for specific handling
     boss.pattern = bossConfig.pattern;
     boss.attackDelay = bossConfig.attackDelay;
     boss.projectileSpeed = bossConfig.projectileSpeed;
-    boss.lastAttackTime = 0;
-    boss.attackPhase = 0;
+    boss.lastAttackTime = this.time.now + 1000; // Small delay before first attack
+    boss.attackPhase = 0; // Used for patterns like spiral/circle
 
+    // Pattern-specific properties
+    boss.chargePrepareTime = bossConfig.chargePrepareTime;
+    boss.chargeDuration = bossConfig.chargeDuration;
+    boss.chargeSpeed = bossConfig.chargeSpeed;
+    boss.isPreparingCharge = false;
+    boss.isCharging = false;
+
+    boss.splitDelay = bossConfig.splitDelay;
+    boss.spiralCount = bossConfig.spiralCount;
+    boss.waveCount = bossConfig.waveCount;
+    boss.waveSpread = bossConfig.waveSpread;
+
+    boss.setCollideWorldBounds(true);
+    boss.setImmovable(true); // Bosses often shouldn't be pushed easily
+
+    // --- Boss Attack Logic ---
     boss.updateAttack = (time) => {
-      if (time < boss.lastAttackTime + boss.attackDelay) return;
+        if (!boss.active || !this.player.active) return;
 
-      boss.lastAttackTime = time;
-      const intensity = 0.008;
-      const duration = 300;
+        // Handle charging state separately
+        if (boss.isCharging || boss.isPreparingCharge) {
+            this.processChargingState(boss, time);
+            return; // Don't execute normal attacks while charging
+        }
 
-      switch (boss.pattern) {
-        case 'circle':
-          for (let i = 0; i < 8; i++) {
-            const angle = (i / 8) * Math.PI * 2 + boss.attackPhase;
-            this.createBossProjectile(
-              boss.x,
-              boss.y,
-              Math.cos(angle) * boss.projectileSpeed,
-              Math.sin(angle) * boss.projectileSpeed
-            );
-          }
-          boss.attackPhase += Math.PI / 16;
-          this.shake(intensity, duration);
-          break;
+        // Check attack cooldown
+        if (time < boss.lastAttackTime + boss.attackDelay) return;
 
-        case 'charge':
-          const chargeSpeed = boss.speed * 3;
-          const dx = this.player.x - boss.x;
-          const dy = this.player.y - boss.y;
-          const dist = Math.hypot(dx, dy) || 1;
-          boss.setVelocity(
-            (dx / dist) * chargeSpeed,
-            (dy / dist) * chargeSpeed
-          );
-          this.shake(intensity * 0.7, duration);
-          break;
+        boss.lastAttackTime = time;
+        const intensity = 0.008; // Screen shake intensity
+        const duration = 300; // Screen shake duration
 
-        case 'split':
-          const angles = [0, Math.PI / 2, Math.PI, 3 * Math.PI / 2];
-          angles.forEach(angle => {
-            const proj = this.createBossProjectile(
-              boss.x,
-              boss.y,
-              Math.cos(angle) * boss.projectileSpeed,
-              Math.sin(angle) * boss.projectileSpeed
-            );
-
-            this.time.delayedCall(1000, () => {
-              if (proj.active) {
-                for (let i = 0; i < 3; i++) {
-                  const splitAngle = angle + (i - 1) * Math.PI / 4;
-                  this.createBossProjectile(
-                    proj.x,
-                    proj.y,
-                    Math.cos(splitAngle) * boss.projectileSpeed * 0.7,
-                    Math.sin(splitAngle) * boss.projectileSpeed * 0.7
-                  );
+        // Execute attack based on pattern
+        switch (boss.pattern) {
+            case 'circle':
+                const circleCount = 8;
+                for (let i = 0; i < circleCount; i++) {
+                    const angle = (i / circleCount) * Math.PI * 2 + boss.attackPhase;
+                    this.createBossProjectile(boss.x, boss.y, Math.cos(angle) * boss.projectileSpeed, Math.sin(angle) * boss.projectileSpeed);
                 }
-                proj.destroy();
-              }
-            });
-          });
-          this.shake(intensity * 0.5, duration);
-          break;
+                boss.attackPhase += Math.PI / 16; // Rotate pattern slightly each time
+                this.shake(intensity, duration);
+                break;
 
-        case 'spiral':
-          const spiralCount = 3;
-          for (let i = 0; i < spiralCount; i++) {
-            const spiralAngle = boss.attackPhase + (i * Math.PI * 2 / spiralCount);
-            this.createBossProjectile(
-              boss.x,
-              boss.y,
-              Math.cos(spiralAngle) * boss.projectileSpeed,
-              Math.sin(spiralAngle) * boss.projectileSpeed
-            );
-          }
-          boss.attackPhase += Math.PI / 8;
-          this.shake(intensity * 0.3, duration);
-          break;
+            case 'charge':
+                // Initiate charge preparation
+                boss.isPreparingCharge = true;
+                boss.chargeStartTime = time;
+                boss.setVelocity(0, 0);
+                boss.setTint(0xffa500); // Orange tint during prep
+                break;
 
-        case 'waves':
-          const waveCount = 5;
-          const spread = Math.PI / 3;
-          const baseAngle = Math.atan2(
-            this.player.y - boss.y,
-            this.player.x - boss.x
-          );
+            case 'split':
+                const splitAngles = [0, Math.PI / 2, Math.PI, (3 * Math.PI) / 2]; // 4 directions
+                splitAngles.forEach(angle => {
+                    const proj = this.createBossProjectile(boss.x, boss.y, Math.cos(angle) * boss.projectileSpeed, Math.sin(angle) * boss.projectileSpeed);
+                    if (proj) {
+                        // Schedule the split
+                        this.time.delayedCall(boss.splitDelay, () => {
+                            if (proj.active) { // Check if original projectile still exists
+                                const splitCount = 3;
+                                for (let i = 0; i < splitCount; i++) {
+                                    const splitAngle = angle + (i - 1) * (Math.PI / 6); // Small spread
+                                    this.createBossProjectile(proj.x, proj.y, Math.cos(splitAngle) * boss.projectileSpeed * 0.7, Math.sin(splitAngle) * boss.projectileSpeed * 0.7);
+                                }
+                                proj.destroy(); // Destroy original after splitting
+                            }
+                        });
+                    }
+                });
+                this.shake(intensity * 0.8, duration);
+                break;
 
-          for (let i = 0; i < waveCount; i++) {
-            const offset = (i - (waveCount - 1) / 2) * (spread / (waveCount - 1));
-            const angle = baseAngle + offset;
-            this.createBossProjectile(
-              boss.x,
-              boss.y,
-              Math.cos(angle) * boss.projectileSpeed,
-              Math.sin(angle) * boss.projectileSpeed
-            );
-          }
-          this.shake(intensity * 0.6, duration);
-          break;
-      }
+            case 'spiral':
+                for (let i = 0; i < boss.spiralCount; i++) {
+                    const spiralAngle = boss.attackPhase + (i * Math.PI * 2 / boss.spiralCount);
+                    this.createBossProjectile(boss.x, boss.y, Math.cos(spiralAngle) * boss.projectileSpeed, Math.sin(spiralAngle) * boss.projectileSpeed);
+                }
+                boss.attackPhase += Math.PI / 12; // Adjust rotation speed
+                this.shake(intensity * 0.6, duration);
+                break;
+
+            case 'waves':
+                const baseAngle = Phaser.Math.Angle.Between(boss.x, boss.y, this.player.x, this.player.y);
+                for (let i = 0; i < boss.waveCount; i++) {
+                    // Calculate angle for each projectile in the wave
+                    const offset = (i - (boss.waveCount - 1) / 2) * (boss.waveSpread / (boss.waveCount > 1 ? boss.waveCount - 1 : 1));
+                    const angle = baseAngle + offset;
+                    this.createBossProjectile(boss.x, boss.y, Math.cos(angle) * boss.projectileSpeed, Math.sin(angle) * boss.projectileSpeed);
+                }
+                this.shake(intensity * 0.7, duration);
+                break;
+
+            case 'combo': // Example: Mix of circle and targeted shots
+                 // Circle part
+                 const comboCircleCount = 6;
+                 for (let i = 0; i < comboCircleCount; i++) {
+                     const angle = (i / comboCircleCount) * Math.PI * 2 + boss.attackPhase;
+                     this.createBossProjectile(boss.x, boss.y, Math.cos(angle) * boss.projectileSpeed * 0.8, Math.sin(angle) * boss.projectileSpeed * 0.8);
+                 }
+                 boss.attackPhase += Math.PI / 10;
+                 // Targeted part (after a small delay)
+                 this.time.delayedCall(300, () => {
+                     if(boss.active && this.player.active) {
+                         const targetAngle = Phaser.Math.Angle.Between(boss.x, boss.y, this.player.x, this.player.y);
+                         this.createBossProjectile(boss.x, boss.y, Math.cos(targetAngle) * boss.projectileSpeed, Math.sin(targetAngle) * boss.projectileSpeed);
+                     }
+                 });
+                 this.shake(intensity, duration);
+                 break;
+        }
     };
+    this.roomActive = true; // Mark room as active
   }
 
-  shootEnemyProjectile(enemy) {
-    const angle = Phaser.Math.Angle.Between(
-      enemy.x, enemy.y,
-      this.player.x, this.player.y
-    );
+  shootEnemyProjectile(enemy, targetX, targetY) {
+    if (!enemy.active) return; // Don't shoot if enemy is dead
 
-    const speed = enemy.type === 'wizard' ? 200 : 150;
-    const scale = enemy.type === 'witch' ? 1.5 : 1;
+    const angle = Phaser.Math.Angle.Between(enemy.x, enemy.y, targetX, targetY);
+    const speed = (enemy.type === 'wizard' || enemy.type === 'witch') ? 200 : 150; // Adjust speed per type
+    const texture = (enemy.type === 'witch') ? 'boss_projectile' : 'blob_projectile'; // Witch uses different projectile?
+    const scale = 1; // Adjust scale if needed
 
-    const proj = this.enemyProj.create(enemy.x, enemy.y, 'blob_projectile');
-    proj.setVelocity(
-      Math.cos(angle) * speed,
-      Math.sin(angle) * speed
-    );
+    const proj = this.enemyProj.create(enemy.x, enemy.y, texture);
+    if (!proj) return; // Pool check
+
     proj.setScale(scale);
+    proj.setVelocity(Math.cos(angle) * speed, Math.sin(angle) * speed);
+    proj.damage = enemy.damage; // Assign damage value to projectile if needed elsewhere
+    proj.body.onWorldBounds = true; // Ensure it checks world bounds
   }
+
 
   onHitEnemy(proj, enemy) {
-    // Visual feedback
+    if (!proj.active || !enemy.active) return; // Ignore if either is already inactive
+
+    // Visual feedback: Tint red briefly
     enemy.setTint(0xff0000);
     this.time.delayedCall(100, () => {
-      if (enemy.active) enemy.clearTint();
+      if (enemy.active) enemy.clearTint(); // Check active before clearing tint
     });
 
     // Apply damage
-    enemy.health -= proj.damage;
-    proj.destroy();
+    enemy.health -= proj.damage; // Use damage property from projectile
+    proj.destroy(); // Destroy the projectile
 
+    // Check for enemy death
     if (enemy.health <= 0) {
+      // --- Enemy Defeated ---
+      enemy.destroy(); // Remove enemy sprite and body
+
       // Drop rewards
       if (enemy.type === "boss") {
+        // Bosses always drop an upgrade
         this.dropRandomUpgrade(enemy.x, enemy.y);
-        this.onBossDefeated();
-        this.sounds.upgrade.play();
+        this.onBossDefeated(); // Trigger boss defeat sequence (next level, etc.)
+        // Sound played in onBossDefeated
       } else {
+        // Regular enemies drop coins (maybe chance for health?)
         this.coins++;
         this.coinsText.setText(`Coins: ${this.coins}`);
+        // Potential health drop chance
+        if (Phaser.Math.Between(1, 20) === 1) { // 5% chance
+            // Create a small health pickup? (Needs asset and pickup logic)
+        }
       }
-      enemy.destroy();
+
+      // Check if room is now clear
+      if (this.roomActive && this.enemies.countActive() === 0) {
+          this.roomActive = false;
+          this.openAllDoors();
+          this.clearedRooms.add(`${this.currentRoom.x},${this.currentRoom.y}`);
+          // Play room clear sound?
+      }
     }
   }
 
   processChargingState(enemy, time) {
+    if (!enemy.active) return;
+
     if (enemy.isPreparingCharge) {
-      if (time > enemy.chargeStartTime + enemy.chargeDuration) {
+      // Check if preparation time is over
+      if (time > enemy.chargeStartTime + enemy.chargePrepareTime) {
         enemy.isPreparingCharge = false;
         enemy.isCharging = true;
-        enemy.chargeEndTime = time + 500;
+        enemy.chargeEndTime = time + enemy.chargeDuration; // Calculate when charge ends
 
-        const dx = this.player.x - enemy.x;
-        const dy = this.player.y - enemy.y;
-        const dist = Math.hypot(dx, dy) || 1;
+        // Determine charge direction towards player's position *at the start of the charge*
+        const targetX = this.player.x;
+        const targetY = this.player.y;
+        const angle = Phaser.Math.Angle.Between(enemy.x, enemy.y, targetX, targetY);
 
-        const chargeSpeed = enemy.type === "boss" ? 300 : 250;
+        // Set velocity for the charge
         enemy.setVelocity(
-          (dx / dist) * chargeSpeed,
-          (dy / dist) * chargeSpeed
+          Math.cos(angle) * enemy.chargeSpeed,
+          Math.sin(angle) * enemy.chargeSpeed
         );
 
-        enemy.setTint(0xff0000);
+        // Visual feedback for charging
+        enemy.setTint(0xff0000); // Red tint while charging
       }
     } else if (enemy.isCharging) {
+      // Check if charge duration is over
       if (time > enemy.chargeEndTime) {
         enemy.isCharging = false;
         enemy.clearTint();
-        enemy.lastShootTime = time;
+        enemy.setVelocity(0, 0); // Stop after charging
+        // enemy.lastShootTime = time; // Use if charge acts as an "attack" for cooldown purposes
       }
+      // Note: Collision handling during charge is done in setupColliders
     }
   }
 
+
   dropRandomUpgrade(x, y) {
-    const types = ["hp", "damage", "speed", "doubleShot", "splitShot", "dodge"];
-    const choice = Phaser.Utils.Array.GetRandom(types);
-    const keyMap = {
-      hp: "hp_icon",
-      damage: "damage_icon",
-      speed: "speed_icon",
-      doubleShot: "doubleshot_icon",
-      splitShot: "splitshot_icon",
-      dodge: "dodge_icon"
-    };
+    // Define possible upgrades and their corresponding icons
+    const upgradeOptions = [
+      { key: "hp", icon: "hp_icon" },
+      { key: "damage", icon: "damage_icon" },
+      { key: "speed", icon: "speed_icon" },
+      { key: "doubleShot", icon: "doubleshot_icon" },
+      { key: "splitShot", icon: "splitshot_icon" },
+      { key: "dodge", icon: "dodge_icon" },
+      // Add more potential upgrades here if needed
+    ];
 
-    const pickup = this.pickups.create(x, y, keyMap[choice]);
-    pickup.upgradeType = choice;
+    // Choose a random upgrade
+    const chosenUpgrade = Phaser.Utils.Array.GetRandom(upgradeOptions);
 
+    // Create the pickup sprite at the specified location
+    const pickup = this.pickups.create(x, y, chosenUpgrade.icon);
+    if (!pickup) return; // Check if creation failed
+
+    pickup.upgradeType = chosenUpgrade.key; // Store the type of upgrade this pickup represents
+    pickup.setScale(1.2); // Make it slightly larger and more visible
+
+    // Add a visual effect (e.g., pulsing scale or floating)
     this.tweens.add({
       targets: pickup,
-      scale: 1.2,
-      yoyo: true,
-      repeat: -1,
-      duration: 500
+      scale: 1.4, // Pulse slightly larger
+      yoyo: true, // Scale back down
+      repeat: -1, // Repeat indefinitely
+      duration: 500, // Duration of one pulse cycle
+      ease: 'Sine.easeInOut'
+    });
+
+    // Optional: Add floating effect
+    this.tweens.add({
+        targets: pickup,
+        y: y - 10, // Float up
+        yoyo: true,
+        repeat: -1,
+        duration: 1000, // Slower duration for floating
+        ease: 'Sine.easeInOut'
     });
   }
 
   onPickup(player, pickup) {
-    this.sounds.powerup.play();
+    if (!pickup.active) return; // Ignore if pickup already collected
 
+    this.sounds.powerup.play(); // Play powerup sound effect
+
+    // Apply the upgrade based on the pickup's type
     switch (pickup.upgradeType) {
       case "hp":
         this.player.maxHealth += 2;
+        // Heal the player by the amount gained, up to the new max health
         this.player.health = Math.min(this.player.health + 2, this.player.maxHealth);
         this.upgrades.hp++;
+        this.updateHearts(); // Update heart display immediately
         break;
       case "damage":
-        this.damageMultiplier += 0.3;
+        this.damageMultiplier += 0.3; // Increase damage multiplier
         this.upgrades.damage++;
         break;
       case "speed":
-        this.playerSpeed += 20;
+        this.playerSpeed += 20; // Increase base player speed
         this.upgrades.speed++;
         break;
       case "doubleShot":
-        this.upgrades.doubleShot++;
+        this.upgrades.doubleShot++; // Increment double shot level
         break;
       case "splitShot":
-        this.upgrades.splitShot++;
+        this.upgrades.splitShot++; // Increment split shot level (more projectiles per side)
         break;
       case "dodge":
-        this.upgrades.dodge++;
-        this.dodgeCount++;
+        if (this.upgrades.dodge < 5) { // Add a cap to dodges? (e.g., max 5)
+            this.upgrades.dodge++;
+            this.dodgeCount++; // Immediately gain the extra dodge charge
+            // Add a new null entry to the cooldowns array
+            this.dodgeCooldowns.push(null);
+            // Update the dodge UI (called in main update loop)
+        } else {
+            // If max dodges reached, maybe give coins instead?
+            this.coins += 5;
+            this.coinsText.setText(`Coins: ${this.coins}`);
+            this.showTempMessage("Max Dodges Reached! +5 Coins");
+        }
         break;
+      // Add cases for other pickup types (e.g., coins, health potions) if implemented
     }
 
-    this.updateHearts();
-    this.updatePowerupIcons();
-    pickup.destroy();
+    this.updatePowerupIcons(); // Update the display of collected powerups
+    pickup.destroy(); // Remove the pickup item from the game
   }
 
   createShopRoom() {
+    // Define the items available in the shop
     const shopItems = [
       { key: 'hp', name: 'Max Health +2', icon: 'hp_icon', cost: 5, type: 'upgrade', desc: '+2 max health' },
-      { key: 'damage', name: 'Damage Up', icon: 'damage_icon', cost: 10, type: 'upgrade', desc: '+0.3 damage' },
-      { key: 'speed', name: 'Speed Up', icon: 'speed_icon', cost: 5, type: 'upgrade', desc: '+20 speed' },
-      { key: 'doubleShot', name: 'Double Shot', icon: 'doubleshot_icon', cost: 10, type: 'upgrade', desc: 'Shoot 2 at once' },
-      { key: 'splitShot', name: 'Split Shot', icon: 'splitshot_icon', cost: 10, type: 'upgrade', desc: 'Spread shot' },
-      { key: 'dodge', name: 'Extra Dodge', icon: 'dodge_icon', cost: 5, type: 'upgrade', desc: '+1 dodge' },
+      { key: 'damage', name: 'Damage Up', icon: 'damage_icon', cost: 10, type: 'upgrade', desc: '+0.3 damage mult' },
+      { key: 'speed', name: 'Speed Up', icon: 'speed_icon', cost: 5, type: 'upgrade', desc: '+20 move speed' },
+      { key: 'doubleShot', name: 'Double Shot', icon: 'doubleshot_icon', cost: 15, type: 'upgrade', desc: 'Fire second volley' },
+      { key: 'splitShot', name: 'Split Shot +1', icon: 'splitshot_icon', cost: 15, type: 'upgrade', desc: '+1 proj per side' },
+      { key: 'dodge', name: 'Extra Dodge', icon: 'dodge_icon', cost: 10, type: 'upgrade', desc: '+1 dodge charge' },
       { key: 'heal', name: 'Health Potion', icon: 'hp_icon', cost: 5, type: 'consumable', desc: 'Restore 2 health' }
     ];
 
-    // Random selection
+    // Randomly select 3 items to display (ensure no duplicates if possible)
     const selection = Phaser.Utils.Array.Shuffle(shopItems).slice(0, 3);
-    this.shopIcons = [];
+    this.shopIcons = []; // Array to store shop item sprites and texts
 
+    // Display the selected items
     selection.forEach((item, i) => {
-      const x = 300 + i * 100;
-      const y = 250;
+      const x = 250 + i * 150; // Position items horizontally
+      const y = 300; // Vertical position of items
 
+      // Create item sprite
       const sprite = this.add.image(x, y, item.icon)
-        .setScale(2)
-        .setInteractive();
+        .setScale(1.5) // Make icons noticeable
+        .setInteractive({ useHandCursor: true }); // Make it clickable
 
-      const text = this.add.text(x, y + 50,
-        `${item.name}\n${item.cost} coins`, {
+      // Create item name and cost text
+      const text = this.add.text(x, y + 50, `${item.name}\nCost: ${item.cost}`, {
         font: '16px Arial',
         fill: '#fff',
-        align: 'center'
+        align: 'center',
+        backgroundColor: '#000a', // Semi-transparent background
+        padding: { x: 5, y: 2 }
       }).setOrigin(0.5);
 
-      const desc = this.add.text(x, y + 75,
-        item.desc, {
+      // Create item description text
+      const desc = this.add.text(x, y + 90, item.desc, {
         font: '12px Arial',
-        fill: '#aaa',
-        align: 'center'
+        fill: '#bbb',
+        align: 'center',
+        wordWrap: { width: 120 } // Wrap description text
       }).setOrigin(0.5);
 
+      // Store references
+      const itemGroup = { sprite, text, desc, itemData: item };
+      this.shopIcons.push(itemGroup);
+
+      // Handle purchase on click/tap
       sprite.on('pointerdown', () => {
         if (this.coins >= item.cost) {
+          // Sufficient coins
           this.coins -= item.cost;
           this.coinsText.setText(`Coins: ${this.coins}`);
+          this.sounds.upgrade.play(); // Use upgrade sound for purchase
 
+          // Apply effect based on type
           if (item.type === 'upgrade') {
+            // Use the onPickup logic to apply the upgrade
             this.onPickup(this.player, {
               upgradeType: item.key,
-              destroy: () => { }
+              active: true, // Mock active state for onPickup
+              destroy: () => {} // Mock destroy function
             });
+            this.showTempMessage(`Purchased: ${item.name}`);
           } else if (item.type === 'consumable') {
-            this.player.health = Math.min(
-              this.player.maxHealth,
-              this.player.health + 2
-            );
-            this.updateHearts();
-            this.showTempMessage('Healed 2 health!');
-            this.sounds.powerup.play();
+            if (item.key === 'heal') {
+              const healthBefore = this.player.health;
+              this.player.health = Math.min(this.player.maxHealth, this.player.health + 2);
+              const healedAmount = this.player.health - healthBefore;
+              if (healedAmount > 0) {
+                  this.updateHearts();
+                  this.showTempMessage(`Healed ${healedAmount} health!`);
+                  this.sounds.powerup.play(); // Use powerup sound for heal
+              } else {
+                  this.showTempMessage(`Already at full health!`);
+                  // Refund? Or just waste the purchase? Let's waste it for now.
+                  // this.coins += item.cost; // Uncomment to refund
+                  // this.coinsText.setText(`Coins: ${this.coins}`);
+              }
+            }
           }
 
-          sprite.destroy();
-          text.destroy();
-          desc.destroy();
+          // Remove the purchased item from the shop display
+          sprite.disableInteractive().setTint(0x555555); // Grey out and disable
+          text.setVisible(false); // Hide text
+          desc.setVisible(false);
+          // Optionally, completely destroy the elements:
+          // sprite.destroy();
+          // text.destroy();
+          // desc.destroy();
+
         } else {
+          // Not enough coins
           this.showTempMessage('Not enough coins!');
+          this.sounds.death.play({volume: 0.3}); // Play a failure sound quietly
         }
       });
 
-      this.shopIcons.push({ sprite, text, desc });
+      // Show description on hover (desktop)
+      if (!this.isMobile) {
+          sprite.on('pointerover', () => desc.setVisible(true));
+          sprite.on('pointerout', () => desc.setVisible(false));
+          desc.setVisible(false); // Initially hidden
+      } else {
+          desc.setVisible(true); // Always visible on mobile
+      }
+
     });
 
-    if (!this.shopPrompt.visible) {
-      this.shopPrompt.setText('Shop: Click an item to buy')
-        .setPosition(400, 180)
+    // Display general shop instructions
+    this.shopPrompt.setText('Shop: Tap an item to buy')
+        .setPosition(400, 180) // Position instructions above items
         .setVisible(true);
-    }
   }
 
+
   showTempMessage(text) {
+    // Check if a message is already displayed, remove it first
+    if (this.tempMessage) {
+        this.tempMessage.destroy();
+    }
+
     const msg = this.add
-      .text(400, 150, text, {
+      .text(400, 100, text, { // Position near top-center
         font: "24px Arial",
-        fill: "#ff0000",
-        backgroundColor: "#000",
-        padding: { x: 30, y: 10 },
+        fill: "#ffff00", // Yellow text
+        backgroundColor: "#000000a0", // Semi-transparent black background
+        padding: { x: 15, y: 8 },
         align: 'center'
       })
       .setOrigin(0.5)
-      .setDepth(200);
+      .setDepth(200) // Ensure it's above most elements
+      .setScrollFactor(0); // Fix to camera
 
-    this.time.delayedCall(4000, () => msg.destroy());
+    this.tempMessage = msg; // Store reference
+
+    // Automatically destroy the message after a delay
+    this.time.delayedCall(3000, () => { // 3 seconds duration
+        if (this.tempMessage === msg) { // Only destroy if it's still the current message
+             msg.destroy();
+             this.tempMessage = null;
+        }
+    });
   }
 
-  // Screen shake effect
   shake(intensity = 0.005, duration = 100) {
-    this.cameras.main.shake(duration, intensity);
+    this.cameras.main.shake(duration, intensity, false); // `false` for force parameter
   }
 
   updateHearts() {
-    const full = Math.floor(this.player.health / 2);
-    const half = this.player.health % 2 === 1;
+    const maxHearts = Math.ceil(this.player.maxHealth / 2);
+    const fullHearts = Math.floor(this.player.health / 2);
+    const halfHeart = this.player.health % 2 === 1;
 
-    this.hearts.forEach((h, i) => {
-      if (i < full) h.setTexture("heart_full");
-      else if (i === full && half) h.setTexture("heart_half");
-      else h.setTexture("heart_empty");
+    // Iterate through the displayed heart sprites
+    this.hearts.forEach((heartSprite, i) => {
+      if (i < maxHearts) {
+        // This heart position corresponds to potential health
+        heartSprite.setVisible(true); // Make sure it's visible
+        if (i < fullHearts) {
+          heartSprite.setTexture("heart_full"); // Display a full heart
+        } else if (i === fullHearts && halfHeart) {
+          heartSprite.setTexture("heart_half"); // Display a half heart
+        } else {
+          heartSprite.setTexture("heart_empty"); // Display an empty heart container
+        }
+      } else {
+        // This heart position is beyond the player's max health
+        heartSprite.setVisible(false); // Hide extra heart sprites
+      }
     });
   }
 
-  resetUpgrades() {
-    this.upgrades = {
-      hp: 0,
-      damage: 0,
-      speed: 0,
-      doubleShot: 0,
-      splitShot: 0,
-      dodge: 2
-    };
+  resetGame() {
+    // Reset player stats and upgrades
+    this.coins = 0;
     this.damageMultiplier = 1;
     this.playerSpeed = 160;
+    this.upgrades = { hp: 0, damage: 0, speed: 0, doubleShot: 0, splitShot: 0, dodge: 2 };
+    this.player.health = 6;
+    this.player.maxHealth = 6;
+
+    // Reset dodge system
     this.dodgeCount = 2;
-    this.dodgeCooldowns = [null, null];
-  }
-  
-  handleDoorPrompt(door) {
-    if (door.isOpen) {
-      this.doorPrompt.setText("Press E to enter")
-        .setPosition(door.x, door.y - 40)
-        .setVisible(true);
+    this.dodgeCooldowns = Array(this.upgrades.dodge).fill(null);
 
-      if (this.keys.E.isDown || this.isCrossing(door)) {
-        const [nx, ny] = door.targetRoom.split(",").map(Number);
-        this.transitionToRoom(nx, ny, door.direction);
-      }
-    } else if (!this.roomActive) {
-      door.setTexture("door");
-      door.isOpen = true;
-      if (door.collider) {
-        this.physics.world.removeCollider(door.collider);
-        door.collider = null;
-      }
-    }
-  }
+    // Reset world progression
+    this.currentWorld = 1;
+    this.hardMode = false; // Ensure hard mode is off on restart
 
-  isCrossing(door) {
-    const threshold = 20;
-    switch (door.direction) {
-      case "up":
-        return this.player.y < door.y && Math.abs(this.player.x - door.x) < threshold;
-      case "down":
-        return this.player.y > door.y && Math.abs(this.player.x - door.x) < threshold;
-      case "left":
-        return this.player.x < door.x && Math.abs(this.player.y - door.y) < threshold;
-      case "right":
-        return this.player.x > door.x && Math.abs(this.player.y - door.y) < threshold;
-    }
-    return false;
+    // Reset room tracking
+    this.clearedRooms = new Set();
+    this.visitedRooms = {};
+    this.roomActive = false;
+    this.entryDoorDirection = null;
+
+    // Update UI immediately
+    if (this.coinsText) this.coinsText.setText(`Coins: ${this.coins}`);
+    if (this.worldText) this.worldText.setText(`World: ${this.currentWorld}`);
+    if (this.hearts) this.updateHearts();
+    if (this.powerupContainer) this.updatePowerupIcons();
+
+    // Note: World map regeneration and loading room 0,0 happens in create/loadRoom
   }
 
   transitionToRoom(x, y, direction) {
-    if (this.inTransition) return;
+    if (this.inTransition) return; // Prevent double transitions
     this.inTransition = true;
 
-    // Calculate new player position
+    // Store the direction we came from for the next room's load logic
+    const entryDirection = { 'up': 'down', 'down': 'up', 'left': 'right', 'right': 'left' }[direction];
+
+    // Calculate player's spawn position in the new room
     const { x1, y1, x2, y2 } = this.playArea;
-    let playerX = this.player.x;
-    let playerY = this.player.y;
+    const offset = 50; // How far from the edge the player spawns
+    let newPlayerX = this.player.x;
+    let newPlayerY = this.player.y;
 
     switch (direction) {
-      case "up":
-        playerY = y2 - 80;
-        break;
-      case "down":
-        playerY = y1 + 80;
-        break;
-      case "left":
-        playerX = x2 - 80;
-        break;
-      case "right":
-        playerX = x1 + 80;
-        break;
+      case "up":    newPlayerY = y2 - offset; break;
+      case "down":  newPlayerY = y1 + offset; break;
+      case "left":  newPlayerX = x2 - offset; break;
+      case "right": newPlayerX = x1 + offset; break;
     }
 
-    // Fade transition
-    this.cameras.main.fade(250, 0, 0, 0);
-    this.time.delayedCall(250, () => {
-      this.loadRoom(x, y);
-      this.player.setPosition(playerX, playerY);
-      this.cameras.main.fadeIn(250);
-      this.time.delayedCall(250, () => {
-        this.inTransition = false;
-      });
+    // Fade out screen
+    this.cameras.main.fade(250, 0, 0, 0, false, (camera, progress) => {
+        if (progress === 1) {
+            // --- Actions after fade out ---
+            // Stop player movement during transition
+            this.player.setVelocity(0, 0);
+
+            // Load the new room content (walls, enemies, doors etc.)
+            this.loadRoom(x, y, entryDirection); // Pass the entry direction
+
+            // Position the player in the new room
+            this.player.setPosition(newPlayerX, newPlayerY);
+
+            // --- Fade back in ---
+            this.cameras.main.fadeIn(250, 0, 0, 0);
+            // Optional: Short delay before allowing movement again
+            this.time.delayedCall(100, () => {
+                 this.inTransition = false; // Allow actions again slightly before fade completes
+            });
+            // --- End Fade In ---
+        }
     });
   }
 
-  openAllDoors() {
-    this.doors.children.iterate(door => {
-      door.setTexture("door");
-      door.isOpen = true;
-      if (door.collider) {
-        this.physics.world.removeCollider(door.collider);
-        door.collider = null;
-      }
-    });
-  }
 
   updateMinimap() {
     if (!this.minimapObj) {
-      this.minimapObj = this.add.graphics().setDepth(100);
+      // Create minimap graphics object if it doesn't exist
+      this.minimapObj = this.add.graphics().setDepth(100).setScrollFactor(0); // Fix to camera
+      this.ui.add(this.minimapObj); // Add to UI container
     } else {
-      this.minimapObj.clear();
+      this.minimapObj.clear(); // Clear previous drawing
     }
 
-    const keys = Object.keys(this.roomMap);
-    const coords = keys.map(k => k.split(",").map(Number));
-    const xs = coords.map(c => c[0]);
-    const ys = coords.map(c => c[1]);
+    // Minimap settings
+    const cellWidth = 10;
+    const cellHeight = 8;
+    const cellPadding = 2;
+    const mapOriginX = 650; // Top-right corner position
+    const mapOriginY = 50;
+    const visitedColor = 0xaaaaaa; // Grey for visited
+    const currentColor = 0x00ff00; // Green for current room
+    const bossColor = 0xff0000;    // Red for boss room (if known)
+    const shopColor = 0xffff00;    // Yellow for shop room (if known)
+    const unknownColor = 0x555555; // Dark grey for unseen adjacent rooms
 
-    const minX = Math.min(...xs);
-    const minY = Math.min(...ys);
-    const cell = 8;
-    const pad = 2;
-    const originX = 700;
-    const originY = 50;
-
-    keys.forEach(k => {
-      const [rx, ry] = k.split(",").map(Number);
-      const px = originX + (rx - minX) * (cell + pad);
-      const py = originY + (ry - minY) * (cell + pad);
-
-      this.minimapObj.lineStyle(1, 0xffffff);
-      this.minimapObj.strokeRect(px, py, cell, cell);
-
-      if (this.visitedRooms[k]) {
-        this.minimapObj.fillStyle(0xffffff, 1);
-        this.minimapObj.fillRect(px, py, cell, cell);
-      }
-
-      if (rx === this.currentRoom.x && ry === this.currentRoom.y) {
-        this.minimapObj.lineStyle(2, 0xff0000);
-        this.minimapObj.strokeRect(px - 1, py - 1, cell + 2, cell + 2);
-      }
+    // Find bounds of the discovered map to center it (optional, but nice)
+    let minX = 0, minY = 0, maxX = 0, maxY = 0;
+    Object.keys(this.visitedRooms).forEach(key => {
+        const [rx, ry] = key.split(",").map(Number);
+        minX = Math.min(minX, rx);
+        minY = Math.min(minY, ry);
+        maxX = Math.max(maxX, rx);
+        maxY = Math.max(maxY, ry);
     });
-  }
-  
-  update(time, delta) {
-    if (!this.player.active) return;
 
-    // Handle player movement
+    // Draw visited rooms and potential adjacent rooms
+    const drawnKeys = new Set(); // Keep track of what's drawn
+
+    Object.keys(this.visitedRooms).forEach(key => {
+        if (drawnKeys.has(key)) return; // Skip if already drawn (e.g., as adjacent)
+
+        const [rx, ry] = key.split(",").map(Number);
+        const roomData = this.roomMap[key];
+        if (!roomData) return; // Skip if room data doesn't exist for some reason
+
+        // Calculate drawing position relative to map origin and bounds
+        const drawX = mapOriginX + (rx - minX) * (cellWidth + cellPadding);
+        const drawY = mapOriginY + (ry - minY) * (cellHeight + cellPadding);
+
+        // Determine fill color based on room type and status
+        let fillColor = visitedColor; // Default for visited
+        if (roomData.type === 'boss') fillColor = bossColor;
+        if (roomData.type === 'shop') fillColor = shopColor;
+        if (rx === this.currentRoom.x && ry === this.currentRoom.y) {
+            fillColor = currentColor; // Override for current room
+        }
+
+        // Draw the room rectangle
+        this.minimapObj.fillStyle(fillColor, 0.8); // Slightly transparent fill
+        this.minimapObj.fillRect(drawX, drawY, cellWidth, cellHeight);
+        drawnKeys.add(key);
+
+        // Draw adjacent, unvisited rooms (fog of war)
+        Object.values(roomData.doors).forEach(neighborKey => {
+            if (!this.visitedRooms[neighborKey] && !drawnKeys.has(neighborKey)) {
+                const [nx, ny] = neighborKey.split(",").map(Number);
+                const neighborDrawX = mapOriginX + (nx - minX) * (cellWidth + cellPadding);
+                const neighborDrawY = mapOriginY + (ny - minY) * (cellHeight + cellPadding);
+
+                this.minimapObj.fillStyle(unknownColor, 0.6);
+                this.minimapObj.fillRect(neighborDrawX, neighborDrawY, cellWidth, cellHeight);
+                drawnKeys.add(neighborKey); // Mark as drawn to avoid duplicates
+            }
+        });
+    });
+
+     // Optional: Draw outline around the current room for extra emphasis
+     const currentDrawX = mapOriginX + (this.currentRoom.x - minX) * (cellWidth + cellPadding);
+     const currentDrawY = mapOriginY + (this.currentRoom.y - minY) * (cellHeight + cellPadding);
+     this.minimapObj.lineStyle(1, 0xffffff, 1); // White outline
+     this.minimapObj.strokeRect(currentDrawX - 1, currentDrawY - 1, cellWidth + 2, cellHeight + 2);
+  }
+
+  update(time, delta) {
+    if (!this.player.active || this.inTransition) return; // Do nothing if player is dead or transitioning
+
+    // --- Player Movement ---
     if (!this.isDodging) {
-      let dx = 0, dy = 0;
+      let targetVelocityX = 0;
+      let targetVelocityY = 0;
+      let isMoving = false;
 
       if (this.isMobile) {
         if (this.isTouching) {
-          const centerX = this.cameras.main.width / 4;
-          const centerY = this.cameras.main.height / 2;
-          dx = this.touchPosition.x - centerX;
-          dy = this.touchPosition.y - centerY;
-
+          // Calculate movement vector from joystick base to current touch
+          const basePosX = this.touchIndicator.x;
+          const basePosY = this.touchIndicator.y;
+          let dx = this.touchPosition.x - basePosX;
+          let dy = this.touchPosition.y - basePosY;
           const length = Math.sqrt(dx * dx + dy * dy);
-          if (length > 10) {
-            dx = dx / length;
-            dy = dy / length;
-            
-            // Show touch indicator
-            this.touchIndicator.setPosition(centerX, centerY).setVisible(true);
-            this.touchStick.setPosition(
-              centerX + dx * 30,
-              centerY + dy * 30
-            ).setVisible(true);
-          } else {
-            dx = 0;
-            dy = 0;
+          const deadZone = 10; // Ignore small movements near center
+
+          if (length > deadZone) {
+            // Normalize vector
+            dx /= length;
+            dy /= length;
+            targetVelocityX = dx * this.playerSpeed;
+            targetVelocityY = dy * this.playerSpeed;
+            isMoving = true;
           }
-        } else {
-          this.touchIndicator.setVisible(false);
-          this.touchStick.setVisible(false);
         }
-      } else {
+        // Hide joystick visuals if not touching
+        this.touchIndicator.setVisible(this.isTouching);
+        this.touchStick.setVisible(this.isTouching);
+
+      } else { // Keyboard Movement
+        let dx = 0;
+        let dy = 0;
         if (this.keys.W.isDown) dy = -1;
         else if (this.keys.S.isDown) dy = 1;
-
         if (this.keys.A.isDown) dx = -1;
         else if (this.keys.D.isDown) dx = 1;
-      }
 
-      if (dx !== 0 || dy !== 0) {
-        if (dx !== 0 && dy !== 0) {
-          const length = Math.sqrt(dx * dx + dy * dy);
-          dx /= length;
-          dy /= length;
-        }
-
-        this.player.setVelocity(dx * this.playerSpeed, dy * this.playerSpeed);
-
-        // Play walking sound occasionally
-        if (time > this.footstepTimer + 300) {
-          this.sounds.walk.play();
-          this.footstepTimer = time;
-        }
-      } else {
-        this.player.setVelocity(0, 0);
-      }
-
-      // Handle keyboard shooting
-      if (!this.isMobile && 
-          (this.keys.LEFT.isDown || this.keys.RIGHT.isDown || 
-           this.keys.UP.isDown || this.keys.DOWN.isDown)) {
-        if (time > this.lastShootTime + this.shootCooldown) {
-          let shootDx = 0, shootDy = 0;
-          
-          if (this.keys.LEFT.isDown) shootDx = -1;
-          else if (this.keys.RIGHT.isDown) shootDx = 1;
-          
-          if (this.keys.UP.isDown) shootDy = -1;
-          else if (this.keys.DOWN.isDown) shootDy = 1;
-          
-          const angle = Math.atan2(shootDy, shootDx);
-          this.fireProjectiles(angle);
-          this.lastShootTime = time;
+        if (dx !== 0 || dy !== 0) {
+            isMoving = true;
+            // Normalize diagonal movement
+            if (dx !== 0 && dy !== 0) {
+                const length = Math.sqrt(2);
+                dx /= length;
+                dy /= length;
+            }
+            targetVelocityX = dx * this.playerSpeed;
+            targetVelocityY = dy * this.playerSpeed;
         }
       }
 
-      // Handle dodge with space key
-      if (!this.isMobile && this.keys.SPACE.isDown && this.dodgeCount > 0) {
-        this.performDodge();
+      // Apply velocity
+      this.player.setVelocity(targetVelocityX, targetVelocityY);
+
+      // Play walking sound occasionally when moving
+      if (isMoving && time > this.footstepTimer + 300) {
+        this.sounds.walk.play();
+        this.footstepTimer = time;
       }
+    } // End if (!isDodging)
+
+    // --- Player Shooting (Keyboard/Arrows) ---
+    if (!this.isMobile && !this.isDodging) {
+        let shootDx = 0;
+        let shootDy = 0;
+        if (this.keys.LEFT.isDown) shootDx = -1;
+        else if (this.keys.RIGHT.isDown) shootDx = 1;
+        if (this.keys.UP.isDown) shootDy = -1;
+        else if (this.keys.DOWN.isDown) shootDy = 1;
+
+        if ((shootDx !== 0 || shootDy !== 0) && time > this.lastShootTime + this.shootCooldown) {
+            const angle = Math.atan2(shootDy, shootDx); // Calculate angle from direction vector
+            this.fireProjectiles(angle);
+            this.lastShootTime = time;
+        }
     }
 
-    // Update enemies
+    // --- Player Dodge (Keyboard) ---
+    if (!this.isMobile && Phaser.Input.Keyboard.JustDown(this.keys.SPACE)) {
+         this.performDodge();
+    }
+
+    // --- Enemy Updates ---
     this.enemies.getChildren().forEach(enemy => {
-      this.updateEnemy(enemy, time);
+      this.updateEnemy(enemy, time, delta);
     });
 
-    // Check for door interactions
-    const doors = this.doors.getChildren();
-    for (const door of doors) {
-      const distance = Phaser.Math.Distance.Between(
-        this.player.x, this.player.y, door.x, door.y
-      );
-
-      if (!this.isMobile && distance < 60) {
-        this.handleDoorPrompt(door);
-        break;
-      } else {
-        this.doorPrompt.setVisible(false);
-      }
-    }
-
-    // Clear room when all enemies defeated
-    if (this.roomActive && this.enemies.countActive() === 0) {
-      this.roomActive = false;
-      this.openAllDoors();
-      this.clearedRooms.add(`${this.currentRoom.x},${this.currentRoom.y}`);
-    }
-
-    // Update dodge cooldowns
-    for (let i = 0; i < this.upgrades.dodge; i++) {
-      if (this.dodgeCooldowns[i] && time > this.dodgeCooldowns[i]) {
-        if (this.dodgeCount < this.upgrades.dodge) {
-          this.dodgeCount++;
+    // --- Door Interaction ---
+    let nearDoor = false;
+    this.doors.getChildren().forEach(door => {
+        if (this.handleDoorInteraction(door)) {
+            nearDoor = true; // Set flag if interaction occurred (transition started)
         }
-        this.dodgeCooldowns[i] = null;
-      }
+    });
+    // Hide desktop prompt if not near any door
+    if (!this.isMobile && !nearDoor && this.doorPrompt.visible) {
+        this.doorPrompt.setVisible(false);
     }
 
-    // Draw dodge UI
-    this.drawDodgeUI(time);
-  }
+
+    // --- Dodge Cooldown and UI Update ---
+    let dodgesRecovered = 0;
+    for (let i = 0; i < this.upgrades.dodge; i++) {
+        if (this.dodgeCooldowns[i] !== null && time >= this.dodgeCooldowns[i]) {
+            this.dodgeCooldowns[i] = null; // Cooldown finished
+            dodgesRecovered++;
+        }
+    }
+    // Add recovered dodges back to count, capped by max dodges
+    if (dodgesRecovered > 0) {
+        this.dodgeCount = Math.min(this.upgrades.dodge, this.dodgeCount + dodgesRecovered);
+    }
+    this.drawDodgeUI(time); // Update the visual dodge indicators
+
+    // --- Room Clear Check ---
+    // Moved inside onHitEnemy for more immediate response
+
+  } // End update()
 
   drawDodgeUI(time) {
-    this.minimap.clear();
-    const x = 400;
-    const y = 550;
-    const radius = 15;
-    const gap = 40;
+    this.minimap.clear(); // Using 'minimap' graphics object for dodge UI
+
+    const uiX = 400; // Center X position for the UI
+    const uiY = 565; // Y position near the bottom
+    const radius = 15; // Radius of each dodge indicator circle
+    const gap = 40; // Gap between circles
+    const totalWidth = this.upgrades.dodge * radius * 2 + (this.upgrades.dodge - 1) * gap;
+    const startX = uiX - totalWidth / 2 + radius; // Calculate starting X for the first circle
 
     for (let i = 0; i < this.upgrades.dodge; i++) {
-      const dx = x + (i - this.upgrades.dodge / 2 + 0.5) * gap;
-      
+      const circleX = startX + i * (radius * 2 + gap);
+
+      // Draw outline for all slots
+      this.minimap.lineStyle(2, 0xffffff, 1);
+      this.minimap.strokeCircle(circleX, uiY, radius);
+
+      // Check if this dodge slot is available or on cooldown
       if (i < this.dodgeCount) {
-        // Available dodge
-        this.minimap.fillStyle(0x00ffff, 1);
-        this.minimap.fillCircle(dx, y, radius);
+        // Available dodge: Fill with solid color
+        this.minimap.fillStyle(0x00ffff, 1); // Cyan for available
+        this.minimap.fillCircle(circleX, uiY, radius);
       } else {
-        // Cooldown dodge
-        const cooldown = this.dodgeCooldowns[i];
-        if (cooldown) {
-          const progress = Math.min(1, (cooldown - time) / 4000);
-          
-          // Background
-          this.minimap.fillStyle(0x555555, 1);
-          this.minimap.fillCircle(dx, y, radius);
-          
-          // Cooldown pie
-          this.minimap.fillStyle(0x00ffff, 0.7);
-          this.minimap.slice(
-            dx, y, radius,
-            -Math.PI / 2,
-            -Math.PI / 2 + (1 - progress) * Math.PI * 2,
-            true
-          );
+        // On cooldown: Draw background and progress pie
+        const cooldownIndex = i - this.dodgeCount; // Index within the active cooldowns
+        const cooldownEndTime = this.dodgeCooldowns[cooldownIndex];
+
+        if (cooldownEndTime && cooldownEndTime > time) {
+            // Draw background grey circle
+            this.minimap.fillStyle(0x555555, 0.8); // Dark grey background
+            this.minimap.fillCircle(circleX, uiY, radius);
+
+            // Calculate cooldown progress (0 to 1, where 1 is fully cooled down)
+            const remainingTime = cooldownEndTime - time;
+            const progress = 1 - Math.max(0, remainingTime / this.dodgeCooldownTime);
+
+            // Draw cooldown progress pie (starts from top, goes clockwise)
+            this.minimap.fillStyle(0x00ffff, 0.7); // Semi-transparent cyan for progress
+            this.minimap.slice(
+                circleX, uiY, radius,           // Position and radius
+                Phaser.Math.DegToRad(-90),      // Start angle (top)
+                Phaser.Math.DegToRad(-90 + progress * 360), // End angle based on progress
+                false                          // Draw clockwise
+            );
+            this.minimap.fillPath(); // Fill the slice path
+
+        } else {
+             // Should be available if cooldown ended, but draw empty grey just in case state is weird
+             this.minimap.fillStyle(0x555555, 0.8);
+             this.minimap.fillCircle(circleX, uiY, radius);
         }
       }
-      
-      // Outline
-      this.minimap.lineStyle(2, 0xffffff, 1);
-      this.minimap.strokeCircle(dx, y, radius);
     }
   }
-}
+
+} // End Scene Class
 
 // Game Configuration
 var config = {
-  type: Phaser.AUTO,
+  type: Phaser.AUTO, // Use WebGL if available, otherwise Canvas
   width: 800,
   height: 600,
-  scene: [TitleScene, MainGameScene, GameOverScene],
+  scene: [TitleScene, MainGameScene, GameOverScene], // Scenes in order
   physics: {
     default: "arcade",
     arcade: {
-      gravity: { y: 0 },
-      debug: false
+      gravity: { y: 0 }, // Top-down game, no gravity
+      debug: false // Set to true for physics debugging visuals
     }
   },
-  parent: "game-container",
+  parent: "game-container", // ID of the HTML element to contain the game
   scale: {
-    mode: Phaser.Scale.FIT,
-    autoCenter: Phaser.Scale.CENTER_BOTH
-  }
+    mode: Phaser.Scale.FIT, // Fit the game within the container, maintaining aspect ratio
+    autoCenter: Phaser.Scale.CENTER_BOTH // Center the game canvas horizontally and vertically
+  },
+   render: {
+      pixelArt: true, // Optional: Set true if using pixel art assets for sharper scaling
+      antialias: false // Optional: Set false if pixelArt is true
+   }
 };
 
 // Start the game when window loads
-window.onload = () => new Phaser.Game(config);
+window.onload = () => {
+    const game = new Phaser.Game(config);
+};
