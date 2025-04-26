@@ -8,7 +8,7 @@
     <title>The Forsaken Depths</title>
     <script src="https://cdn.jsdelivr.net/npm/phaser@3.55.2/dist/phaser.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/easystarjs@0.4.4/bin/easystar-0.4.4.min.js"></script>
-    <script src="game.js"></script>
+    <!-- game.js will be loaded AFTER the body elements are defined -->
     <style>
       body {
         background-color: #1a0d00;
@@ -17,30 +17,32 @@
         text-align: center;
         margin: 0;
         padding: 0;
-        overflow: hidden;
+        overflow: hidden; /* Prevent scrollbars */
         height: 100vh;
         width: 100vw;
         display: flex;
         flex-direction: column;
-        justify-content: center;
-        align-items: center;
+        justify-content: center; /* Center vertically */
+        align-items: center; /* Center horizontally */
       }
-      
+
       #game-container {
-        display: flex;
-        justify-content: center;
-        align-items: center;
-        position: relative;
-        overflow: hidden;
+        /* Container for the Phaser canvas */
+        /* The canvas itself will be centered by Phaser's scale manager */
+        margin-bottom: 10px; /* Space below game */
+        position: relative; /* Needed for absolute positioning inside if any */
+        width: 800px; /* Match game config width */
+        height: 600px; /* Match game config height */
+        max-width: 100%; /* Ensure it scales down */
+        max-height: calc(100vh - 120px); /* Adjust max height considering header/footer/buttons */
       }
-      
-      /* This ensures the canvas is centered */
+
       canvas {
-        display: block;
-        margin: 0 auto;
+        display: block; /* Remove extra space below canvas */
       }
-      
+
       #header {
+        /* Keep header styles */
         position: absolute;
         top: 0;
         left: 0;
@@ -49,19 +51,48 @@
         background-color: rgba(0, 0, 0, 0.7);
         z-index: 10;
       }
-      
+
       h1 {
         font-size: 24px;
         margin: 0;
         padding: 0;
         text-shadow: 2px 2px #000;
       }
-      
+
       .controls {
         font-size: 10px;
         margin: 5px 0 0 0;
       }
-      
+
+      /* NEW: Settings Controls Area */
+      #settings-controls {
+        text-align: center;
+        padding: 5px 0; /* Reduced padding */
+        margin-top: 5px; /* Space above buttons */
+        width: 100%; /* Take full width for centering */
+        position: relative; /* Keep it in flow */
+        z-index: 5; /* Below header/info */
+      }
+
+      #settings-controls button {
+        margin: 0 10px;
+        padding: 6px 12px; /* Slightly smaller buttons */
+        font-size: 12px; /* Smaller font */
+        font-family: "Press Start 2P", cursive; /* Match theme */
+        cursor: pointer;
+        background-color: #333;
+        color: #fff;
+        border: 1px solid #555;
+      }
+       #settings-controls button:hover {
+         background-color: #555;
+       }
+       #settings-controls button:disabled {
+         cursor: not-allowed;
+         opacity: 0.5;
+       }
+
+
       /* Footer info toggle */
       #info-toggle {
         position: absolute;
@@ -75,7 +106,7 @@
         z-index: 20;
         font-size: 12px;
       }
-      
+
       #game-info {
         position: absolute;
         bottom: 0;
@@ -87,26 +118,27 @@
         overflow-y: auto;
         display: none;
         z-index: 15;
+        text-align: left; /* Align info text left */
       }
-      
+
       h2 {
         font-size: 14px;
         color: #0f0;
         margin: 5px 0;
       }
-      
+
       p, li {
         font-size: 10px;
         line-height: 1.3;
         margin: 5px 0;
       }
-      
+
       ul {
         list-style: none;
         padding: 0;
         margin: 0;
       }
-      
+
       /* Mobile styles */
       #mobile-controls-info {
         position: fixed;
@@ -118,33 +150,49 @@
         padding: 8px;
         font-size: 10px;
         z-index: 1000;
-        display: none;
+        display: none; /* Hidden by default, shown via media query */
       }
-      
-      @media (max-width: 768px) {
+
+      @media (max-width: 800px), (max-height: 700px) { /* Adjust breakpoint as needed */
         #mobile-controls-info {
           display: block;
         }
-        
         #info-toggle {
-          display: none;
+          display: none; /* Hide desktop info toggle on small screens */
+        }
+        #header .controls {
+            display: none; /* Hide desktop controls text */
+        }
+        h1 {
+            font-size: 18px; /* Smaller title */
+        }
+        #settings-controls {
+            padding-bottom: 40px; /* Add space so buttons aren't covered by mobile info */
         }
       }
     </style>
     <link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap" rel="stylesheet" />
   </head>
   <body>
+    <!-- Header remains the same -->
     <div id="header">
       <h1>The Forsaken Depths</h1>
       <div class="controls">
         WASD to move, Arrow Keys or Mouse to shoot. Press E to open doors. Press SPACE to dodge!
       </div>
     </div>
-    
+
+    <!-- Game Container remains the same -->
     <div id="game-container"></div>
-    
+
+    <!-- NEW: External Settings Controls -->
+    <div id="settings-controls">
+        <button id="volume-btn">Mute</button>
+        <button id="fullscreen-btn">Enter Fullscreen</button>
+    </div>
+
+    <!-- Info Toggle and Panel remain the same -->
     <button id="info-toggle">Game Info</button>
-    
     <div id="game-info">
       <h2>Features:</h2>
       <ul>
@@ -161,43 +209,49 @@
         wisely to survive. Dodge enemy charge attacks!
       </p>
     </div>
-    
+
+    <!-- Mobile Info remains the same -->
     <div id="mobile-controls-info">
       Left side: Move • Right side: Dodge • Game auto-shoots at enemies • Tap door prompts & items to interact
     </div>
-    
+
+    <!-- Load game script AFTER HTML elements are defined -->
+    <script src="game.js"></script>
+
+    <!-- Keep existing script for info toggle and mobile info fade -->
     <script>
       // Toggle game info
-      document.getElementById('info-toggle').addEventListener('click', function() {
-        const info = document.getElementById('game-info');
-        if (info.style.display === 'block') {
-          info.style.display = 'none';
-        } else {
-          info.style.display = 'block';
-        }
-      });
-      
-      // Attempt to go fullscreen when the page loads
-      document.addEventListener('click', function() {
-        if (document.documentElement.requestFullscreen) {
-          document.documentElement.requestFullscreen().catch(err => {
-            console.log('Fullscreen request failed: ', err);
+      const infoToggleBtn = document.getElementById('info-toggle');
+      const gameInfoPanel = document.getElementById('game-info');
+      if (infoToggleBtn && gameInfoPanel) {
+          infoToggleBtn.addEventListener('click', function() {
+            if (gameInfoPanel.style.display === 'block') {
+              gameInfoPanel.style.display = 'none';
+            } else {
+              gameInfoPanel.style.display = 'block';
+            }
           });
-        }
-      }, { once: true });
-      
-      // Prevent scrolling on mobile
+      }
+
+      // REMOVED: Automatic fullscreen attempt on click
+      // document.addEventListener('click', function() { ... });
+
+      // Prevent scrolling on mobile (keep this)
       document.addEventListener('touchmove', function(e) {
-        e.preventDefault();
+        // Only prevent default if the touch is not on an interactive element like a button
+        // or within a scrollable area like #game-info
+        if (!e.target.closest('button, #game-info')) {
+            e.preventDefault();
+        }
       }, { passive: false });
-      
-      // Hide the mobile controls info after 8 seconds
+
+      // Hide the mobile controls info after 8 seconds (keep this)
       setTimeout(function() {
         const mobileInfo = document.getElementById('mobile-controls-info');
         if (mobileInfo) {
           mobileInfo.style.opacity = '0';
           mobileInfo.style.transition = 'opacity 1s';
-          setTimeout(() => mobileInfo.style.display = 'none', 1000);
+          setTimeout(() => mobileInfo.style.display = 'none', 1000); // Hide completely after fade
         }
       }, 8000);
     </script>
