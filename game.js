@@ -1183,83 +1183,28 @@ class TitleScene extends Phaser.Scene {
       }
     }
   
-    // --- Map & Rooms ---
-    generateWorldMap() {
-      this.roomMap = {};
-      this.visitedRooms = {};
-      this.clearedRooms = new Set();
-      this.roomMap["0,0"] = { type: "start", doors: {}, depth: 0, variation: 0 };
-      let pos = { x: 0, y: 0 },
-        len = 0,
-        exitKey = null;
-      while (len < 3 || (len < 8 && Math.random() < 0.7)) {
-        const dirs = Phaser.Utils.Array.Shuffle([
-          { dx: 0, dy: -1, dir: "up", opp: "down" },
-          { dx: 1, dy: 0, dir: "right", opp: "left" },
-          { dx: 0, dy: 1, dir: "down", opp: "up" },
-          { dx: -1, dy: 0, dir: "left", opp: "right" },
-        ]);
-        let moved = false;
-        for (const d of dirs) {
-          const nx = pos.x + d.dx,
-            ny = pos.y + d.dy,
-            key = `${nx},${ny}`;
-          if (!this.roomMap[key]) {
-            this.roomMap[key] = {
-              type: "normal",
-              doors: {},
-              depth: len + 1,
-              variation: Phaser.Math.Between(0, 2),
-            };
-            this.roomMap[`${pos.x},${pos.y}`].doors[d.dir] = key;
-            this.roomMap[key].doors[d.opp] = `${pos.x},${pos.y}`;
-            pos = { x: nx, y: ny };
-            len++;
-            exitKey = key;
-            moved = true;
-            break;
-          }
-        }
-        if (!moved) break;
-      }
-      if (exitKey) this.roomMap[exitKey].type = "boss";
-      const normals = Object.keys(this.roomMap).filter(
-        (k) => this.roomMap[k].type === "normal"
-      );
-      if (normals.length)
-        this.roomMap[Phaser.Utils.Array.GetRandom(normals)].type = "shop";
-      for (let i = 0; i < 3; i++) {
-        const keys = Object.keys(this.roomMap);
-        const base = Phaser.Utils.Array.GetRandom(keys);
-        const [bx, by] = base.split(",").map(Number);
-        const dirs = Phaser.Utils.Array.Shuffle([
-          { dx: 0, dy: -1, dir: "up", opp: "down" },
-          { dx: 1, dy: 0, dir: "right", opp: "left" },
-          { dx: 0, dy: 1, dir: "down", opp: "up" },
-          { dx: -1, dy: 0, dir: "left", opp: "right" },
-        ]);
-        for (const d of dirs) {
-          const nx = bx + d.dx,
-            ny = by + d.dy,
-            key = `${nx},${ny}`;
-          if (
-            !this.roomMap[key] &&
-            Object.keys(this.roomMap[base].doors).length < 3
-          ) {
-            this.roomMap[key] = {
-              type: "normal",
-              doors: {},
-              depth: this.roomMap[base].depth + 1,
-              variation: Phaser.Math.Between(0, 2),
-            };
-            this.roomMap[base].doors[d.dir] = key;
-            this.roomMap[key].doors[d.opp] = base;
-            break;
-          }
-        }
-      }
+    // --- Room Layout ---
+    createRoomLayout(key) {
+      // Layout the room: walls, floor, and doors based on roomMap[key]
+      // Add outer walls
+      const bounds = this.playArea || { x1: 60, y1: 60, x2: 740, y2: 540 };
+      const { x1, y1, x2, y2 } = bounds;
+      // Top
+      this.walls.create(400, y1, "wall").setScale(10, 1).refreshBody();
+      // Bottom
+      this.walls.create(400, y2, "wall").setScale(10, 1).refreshBody();
+      // Left
+      this.walls.create(x1, 300, "wall").setScale(1, 10).refreshBody();
+      // Right
+      this.walls.create(x2, 300, "wall").setScale(1, 10).refreshBody();
+      // Add doors if present
+      const doors = this.roomMap[key].doors;
+      if (doors && doors.up) this.doors.create(400, y1, "door").setDepth(2);
+      if (doors && doors.down) this.doors.create(400, y2, "door").setDepth(2);
+      if (doors && doors.left) this.doors.create(x1, 300, "door").setDepth(2);
+      if (doors && doors.right) this.doors.create(x2, 300, "door").setDepth(2);
     }
-  
+
     loadRoom(x, y) {
       // remove any leftover shop icons
       if (this.shopIcons) {
@@ -1275,20 +1220,17 @@ class TitleScene extends Phaser.Scene {
       this.projectiles.clear(true, true);
       this.pickups.clear(true, true);
       this.inTransition = false;
-  
+
       this.currentRoom = { x, y };
       const key = `${x},${y}`;
       this.roomMap[key].visited = true;
       this.visitedRooms[key] = true;
-  
+
       // layout
       if (this.roomMap[key].type !== "shop") {
-        this.createRoomLayout(this.roomMap[key].variation);
-        ["up", "down", "left", "right"].forEach((d) =>
-          this.createWallSegments(d, !!this.roomMap[key].doors[d])
-        );
+        this.createRoomLayout(key);
       }
-  
+
       // room type
       switch (this.roomMap[key].type) {
         case "shop":
