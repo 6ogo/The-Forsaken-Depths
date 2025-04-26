@@ -703,8 +703,6 @@ class MainGameScene extends Phaser.Scene {
       // Add other ESC functions if needed (e.g., pause menu)
     }, this);
 
-    // Door interaction key (Desktop)
-    this.keys.E.on('down', this.tryEnterDoor, this);
   }
 
   setupMobileControls() {
@@ -3826,89 +3824,58 @@ class MainGameScene extends Phaser.Scene {
     if (this.dodgeCircles) this.updateDodgeUI(); // Update dodge UI for reset state
   }
 
-  transitionToRoom(targetX, targetY, entryDirForNextRoom) {
-    if (this.inTransition) return; // Prevent double transition
+  transitionToRoom(x, y, direction) {
+    if (this.inTransition) return;
     this.inTransition = true;
-    this.player.setVelocity(0, 0); // Stop player movement
 
-    console.log(`Transitioning to room: ${targetX},${targetY}`);
+    // figure out the opposite doorway so enemies spawn in from the right side
+    const exitDir = { up: 'down', down: 'up', left: 'right', right: 'left' }[direction];
 
-    // Fade out current view
-    this.cameras.main.fade(250, 0, 0, 0, false, (cam, progress) => {
-      if (progress === 1) {
-        // --- Actions at full fade ---
-        // Determine player spawn position in the new room
-        const { x1, y1, x2, y2 } = this.playArea;
-        const spawnOffset = 60; // Distance from the entry door
-        let newPlayerX = 400, newPlayerY = 300; // Default center
+    // compute the new player position just inside the next room
+    const { x1, y1, x2, y2 } = this.playArea;
+    const offset = 50;
+    let newX = this.player.x;
+    let newY = this.player.y;
+    switch (direction) {
+      case 'up': newY = y2 - offset; break;
+      case 'down': newY = y1 + offset; break;
+      case 'left': newX = x2 - offset; break;
+      case 'right': newX = x1 + offset; break;
+    }
 
-        switch (entryDirForNextRoom) {
-          case "up": newPlayerY = y1 + spawnOffset; break;
-          case "down": newPlayerY = y2 - spawnOffset; break;
-          case "left": newPlayerX = x1 + spawnOffset; break;
-          case "right": newPlayerX = x2 - spawnOffset; break;
-        }
+    // 1) Fade *out* the old room
+    this.cameras.main.fadeOut(250, 0, 0, 0);
 
-        // Load the new room data and layout
-        this.loadRoom(targetX, targetY, entryDirForNextRoom);
+    // 2) When fade‐out is done, swap rooms and position the player
+    this.cameras.main.once('camerafadeoutcomplete', () => {
+      this.player.setVelocity(0, 0);
+      this.loadRoom(x, y, exitDir);
+      this.player.setPosition(newX, newY);
 
-        // Position the player in the new room BEFORE fade in
-        if (this.player) {
-          this.player.setPosition(newPlayerX, newPlayerY);
-          this.player.alpha = 1; // Ensure player is visible for fade in
-        } else {
-          console.error("Player object not found during transition!");
-        }
+      // 3) Fade *in* the new room
+      this.cameras.main.fadeIn(250, 0, 0, 0);
 
-
-        // Fade in the new view
-        this.cameras.main.fadeIn(250, 0, 0, 0, (camFadeIn, progressFadeIn) => {
-          if (progressFadeIn === 1) {
-            // --- Actions at full fade in ---
-            this.inTransition = false; // Allow player actions again
-            console.log("Transition complete.");
-          }
-        });
-      }
+      // 4) When fade‐in finishes, allow transitions again
+      this.cameras.main.once('camerafadeincomplete', () => {
+        this.inTransition = false;
+      });
     });
   }
 
   handleDoorInteraction() {
-    let showPrompt = false;
-    let targetDoor = null;
+    if (this.inTransition) return;
 
     this.doors.getChildren().forEach(door => {
-      if (!door.active) return;
-      const dist = Phaser.Math.Distance.Between(this.player.x, this.player.y, door.x, door.y);
+      if (!door.active || !door.isOpen) return;
 
-      if (dist < 60) { // Player is near the door
-        if (door.isOpen) {
-          showPrompt = true;
-          targetDoor = door; // Store the door for potential entry
-          // Check if player is actively moving through the door threshold
-          if (this.isCrossingDoorThreshold(door)) {
-            this.tryEnterDoor(door); // Attempt transition immediately
-            return; // Exit loop early as transition started
-          }
-        } else if (!this.roomActive) {
-          // Room is cleared, but door is somehow still closed? Open it.
-          this.openDoor(door);
-          showPrompt = true; // Show prompt now that it's open
-          targetDoor = door;
-        }
-        // If door is closed and room is active, do nothing (collider handles blocking)
+      const dist = Phaser.Math.Distance.Between(this.player.x, this.player.y, door.x, door.y);
+      if (dist < 60) {
+        // Immediately enter
+        this.tryEnterDoor(door);
       }
     });
-
-    // Update door prompt visibility (Desktop only)
-    if (!this.isMobile) {
-      if (showPrompt && targetDoor) {
-        this.doorPrompt.setText("[E] Enter").setPosition(targetDoor.x, targetDoor.y - 40).setVisible(true);
-      } else {
-        this.doorPrompt.setVisible(false);
-      }
-    }
   }
+
 
   isCrossingDoorThreshold(door) {
     if (!this.player || !this.player.body) return false;
@@ -3925,38 +3892,14 @@ class MainGameScene extends Phaser.Scene {
     return false;
   }
 
-  tryEnterDoor(specificDoor = null) {
-    if (this.inTransition) return;
-
-    let doorToEnter = null;
-
-    if (specificDoor && specificDoor.isOpen) {
-      // If a specific open door is passed (e.g., from key press check)
-      doorToEnter = specificDoor;
-    } else {
-      // If no specific door, check if player is near any open door
-      this.doors.getChildren().forEach(door => {
-        if (door.isOpen && !doorToEnter) { // Find the first nearby open door
-          const dist = Phaser.Math.Distance.Between(this.player.x, this.player.y, door.x, door.y);
-          if (dist < 60) {
-            doorToEnter = door;
-          }
-        }
-      });
-    }
-
-    // If an open door to enter was found
-    if (doorToEnter) {
-      const [targetX, targetY] = doorToEnter.targetRoom.split(",").map(Number);
-      // Determine the entry direction for the *next* room
-      const entryDir = { 'up': 'down', 'down': 'up', 'left': 'right', 'right': 'left' }[doorToEnter.direction];
-      this.transitionToRoom(targetX, targetY, entryDir);
-    }
+  tryEnterDoor(door) {
+    this.lastDoorX = door.x;
+    this.lastDoorY = door.y;
+    const [nx, ny] = door.targetRoom.split(',').map(Number);
+    this.transitionToRoom(nx, ny, door.direction);
   }
 
-
   // --- Pathfinding Functions ---
-
   setupPathfindingGrid() {
     const gridWidth = Math.ceil(this.sys.game.config.width / this.gridCellSize);
     const gridHeight = Math.ceil(this.sys.game.config.height / this.gridCellSize);
