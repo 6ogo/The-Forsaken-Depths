@@ -257,7 +257,13 @@ class MainGameScene extends Phaser.Scene {
     // Create physics groups
     this.setupPhysicsGroups();
 
-    // Create UI
+    // Setup player
+    this.setupPlayer();
+
+    // Input handling - IMPORTANT: Move this BEFORE createUI
+    this.setupInputs();
+
+    // Create UI - Now this comes AFTER input initialization
     this.createUI();
 
     // Handle game mode
@@ -269,12 +275,6 @@ class MainGameScene extends Phaser.Scene {
       this.resetUpgrades();
       this.coins = 0;
     }
-
-    // Setup player
-    this.setupPlayer();
-
-    // Input handling
-    this.setupInputs();
 
     // Generate world
     this.generateWorldMap();
@@ -359,6 +359,7 @@ class MainGameScene extends Phaser.Scene {
       this.invincible = false;
     });
   }
+  
   shootMouse(ptr) {
     if (this.time.now < this.lastShootTime + this.shootCooldown) return;
 
@@ -431,6 +432,7 @@ class MainGameScene extends Phaser.Scene {
       this
     );
   }
+  
   createUI() {
     this.ui = this.add.container(0, 0).setDepth(100);
 
@@ -466,7 +468,19 @@ class MainGameScene extends Phaser.Scene {
         backgroundColor: "#000",
         padding: { x: 10, y: 5 },
       })
-      .setOrigin(0.5)
+      .setOrigin(0.5);
+  }
+
+  // Dodge functionality - Moved from incorrectly being inside createUI
+  performDodge() {
+    if (this.isDodging || this.dodgeCount <= 0) return;
+
+    // Set states
+    this.isDodging = true;
+    this.invincible = true;
+    this.player.setTint(0x00ffff);
+    this.dodgeCount--;
+    
     // Play dash sound
     this.sounds.dash.play();
 
@@ -530,7 +544,6 @@ class MainGameScene extends Phaser.Scene {
       }
     });
   }
-
 
   createPrompts() {
     const promptY = this.isMobile ? 240 : 200;
@@ -652,6 +665,7 @@ class MainGameScene extends Phaser.Scene {
       .setDepth(91)
       .setVisible(false);
   }
+  
   fireProjectiles(angle) {
     const countSplit = this.upgrades.splitShot;
     const spread = Math.PI / 12;
@@ -747,6 +761,7 @@ class MainGameScene extends Phaser.Scene {
       });
     }
   }
+  
   autoShoot() {
     if (!this.player.active || this.time.now < this.lastShootTime + this.shootCooldown) return;
 
@@ -840,6 +855,7 @@ class MainGameScene extends Phaser.Scene {
       });
     }
   }
+  
   generateWorldMap() {
     this.roomMap = {};
     this.visitedRooms = {};
@@ -1099,6 +1115,7 @@ class MainGameScene extends Phaser.Scene {
 
     return enemy;
   }
+  
   updateEnemy(enemy, time) {
     if (enemy.isPreparingCharge || enemy.isCharging) {
       this.processChargingState(enemy, time);
@@ -1436,6 +1453,40 @@ class MainGameScene extends Phaser.Scene {
     });
   }
 
+  onPickup(player, pickup) {
+    this.sounds.powerup.play();
+
+    switch (pickup.upgradeType) {
+      case "hp":
+        this.player.maxHealth += 2;
+        this.player.health = Math.min(this.player.health + 2, this.player.maxHealth);
+        this.upgrades.hp++;
+        break;
+      case "damage":
+        this.damageMultiplier += 0.3;
+        this.upgrades.damage++;
+        break;
+      case "speed":
+        this.playerSpeed += 20;
+        this.upgrades.speed++;
+        break;
+      case "doubleShot":
+        this.upgrades.doubleShot++;
+        break;
+      case "splitShot":
+        this.upgrades.splitShot++;
+        break;
+      case "dodge":
+        this.upgrades.dodge++;
+        this.dodgeCount++;
+        break;
+    }
+
+    this.updateHearts();
+    this.updatePowerupIcons();
+    pickup.destroy();
+  }
+
   createShopRoom() {
     const shopItems = [
       { key: 'hp', name: 'Max Health +2', icon: 'hp_icon', cost: 5, type: 'upgrade', desc: '+2 max health' },
@@ -1556,6 +1607,7 @@ class MainGameScene extends Phaser.Scene {
     this.dodgeCount = 2;
     this.dodgeCooldowns = [null, null];
   }
+  
   handleDoorPrompt(door) {
     if (door.isOpen) {
       this.doorPrompt.setText("Press E to enter")
@@ -1676,7 +1728,174 @@ class MainGameScene extends Phaser.Scene {
       }
     });
   }
+  
+  update(time, delta) {
+    if (!this.player.active) return;
+
+    // Handle player movement
+    if (!this.isDodging) {
+      let dx = 0, dy = 0;
+
+      if (this.isMobile) {
+        if (this.isTouching) {
+          const centerX = this.cameras.main.width / 4;
+          const centerY = this.cameras.main.height / 2;
+          dx = this.touchPosition.x - centerX;
+          dy = this.touchPosition.y - centerY;
+
+          const length = Math.sqrt(dx * dx + dy * dy);
+          if (length > 10) {
+            dx = dx / length;
+            dy = dy / length;
+            
+            // Show touch indicator
+            this.touchIndicator.setPosition(centerX, centerY).setVisible(true);
+            this.touchStick.setPosition(
+              centerX + dx * 30,
+              centerY + dy * 30
+            ).setVisible(true);
+          } else {
+            dx = 0;
+            dy = 0;
+          }
+        } else {
+          this.touchIndicator.setVisible(false);
+          this.touchStick.setVisible(false);
+        }
+      } else {
+        if (this.keys.W.isDown) dy = -1;
+        else if (this.keys.S.isDown) dy = 1;
+
+        if (this.keys.A.isDown) dx = -1;
+        else if (this.keys.D.isDown) dx = 1;
+      }
+
+      if (dx !== 0 || dy !== 0) {
+        if (dx !== 0 && dy !== 0) {
+          const length = Math.sqrt(dx * dx + dy * dy);
+          dx /= length;
+          dy /= length;
+        }
+
+        this.player.setVelocity(dx * this.playerSpeed, dy * this.playerSpeed);
+
+        // Play walking sound occasionally
+        if (time > this.footstepTimer + 300) {
+          this.sounds.walk.play();
+          this.footstepTimer = time;
+        }
+      } else {
+        this.player.setVelocity(0, 0);
+      }
+
+      // Handle keyboard shooting
+      if (!this.isMobile && 
+          (this.keys.LEFT.isDown || this.keys.RIGHT.isDown || 
+           this.keys.UP.isDown || this.keys.DOWN.isDown)) {
+        if (time > this.lastShootTime + this.shootCooldown) {
+          let shootDx = 0, shootDy = 0;
+          
+          if (this.keys.LEFT.isDown) shootDx = -1;
+          else if (this.keys.RIGHT.isDown) shootDx = 1;
+          
+          if (this.keys.UP.isDown) shootDy = -1;
+          else if (this.keys.DOWN.isDown) shootDy = 1;
+          
+          const angle = Math.atan2(shootDy, shootDx);
+          this.fireProjectiles(angle);
+          this.lastShootTime = time;
+        }
+      }
+
+      // Handle dodge with space key
+      if (!this.isMobile && this.keys.SPACE.isDown && this.dodgeCount > 0) {
+        this.performDodge();
+      }
+    }
+
+    // Update enemies
+    this.enemies.getChildren().forEach(enemy => {
+      this.updateEnemy(enemy, time);
+    });
+
+    // Check for door interactions
+    const doors = this.doors.getChildren();
+    for (const door of doors) {
+      const distance = Phaser.Math.Distance.Between(
+        this.player.x, this.player.y, door.x, door.y
+      );
+
+      if (!this.isMobile && distance < 60) {
+        this.handleDoorPrompt(door);
+        break;
+      } else {
+        this.doorPrompt.setVisible(false);
+      }
+    }
+
+    // Clear room when all enemies defeated
+    if (this.roomActive && this.enemies.countActive() === 0) {
+      this.roomActive = false;
+      this.openAllDoors();
+      this.clearedRooms.add(`${this.currentRoom.x},${this.currentRoom.y}`);
+    }
+
+    // Update dodge cooldowns
+    for (let i = 0; i < this.upgrades.dodge; i++) {
+      if (this.dodgeCooldowns[i] && time > this.dodgeCooldowns[i]) {
+        if (this.dodgeCount < this.upgrades.dodge) {
+          this.dodgeCount++;
+        }
+        this.dodgeCooldowns[i] = null;
+      }
+    }
+
+    // Draw dodge UI
+    this.drawDodgeUI(time);
+  }
+
+  drawDodgeUI(time) {
+    this.minimap.clear();
+    const x = 400;
+    const y = 550;
+    const radius = 15;
+    const gap = 40;
+
+    for (let i = 0; i < this.upgrades.dodge; i++) {
+      const dx = x + (i - this.upgrades.dodge / 2 + 0.5) * gap;
+      
+      if (i < this.dodgeCount) {
+        // Available dodge
+        this.minimap.fillStyle(0x00ffff, 1);
+        this.minimap.fillCircle(dx, y, radius);
+      } else {
+        // Cooldown dodge
+        const cooldown = this.dodgeCooldowns[i];
+        if (cooldown) {
+          const progress = Math.min(1, (cooldown - time) / 4000);
+          
+          // Background
+          this.minimap.fillStyle(0x555555, 1);
+          this.minimap.fillCircle(dx, y, radius);
+          
+          // Cooldown pie
+          this.minimap.fillStyle(0x00ffff, 0.7);
+          this.minimap.slice(
+            dx, y, radius,
+            -Math.PI / 2,
+            -Math.PI / 2 + (1 - progress) * Math.PI * 2,
+            true
+          );
+        }
+      }
+      
+      // Outline
+      this.minimap.lineStyle(2, 0xffffff, 1);
+      this.minimap.strokeCircle(dx, y, radius);
+    }
+  }
 }
+
 // Game Configuration
 var config = {
   type: Phaser.AUTO,
